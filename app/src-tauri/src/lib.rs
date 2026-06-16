@@ -501,6 +501,19 @@ fn app_version() -> String {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .setup(|app| {
+            // Explicitly set the window icon from the embedded PNG so the taskbar
+            // / window decoration shows it even for unbundled (target/release)
+            // runs where the platform might not pick up the bundle icon.
+            use tauri::Manager;
+            if let Some(win) = app.get_webview_window("main") {
+                let bytes = include_bytes!("../icons/512x512.png");
+                if let Ok(img) = tauri::image::Image::from_bytes(bytes) {
+                    let _ = win.set_icon(img);
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             snapshot,
             day_summaries,

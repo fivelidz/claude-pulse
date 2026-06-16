@@ -341,6 +341,14 @@ function setWindow(prefix, frac, resetEpochSec) {
   const pctEl = document.getElementById(prefix + "-pct");
   const fillEl = document.getElementById(prefix + "-fill");
   const noteEl = document.getElementById(prefix + "-note");
+  if (!frac && !resetEpochSec) {
+    // no data captured yet for this window
+    pctEl.textContent = "–";
+    pctEl.style.color = "var(--muted)";
+    fillEl.style.width = "0%";
+    if (noteEl) noteEl.textContent = "waiting for a request through the collector";
+    return;
+  }
   if (frac == null || Number.isNaN(frac)) {
     pctEl.textContent = "–";
     fillEl.style.width = "0%";

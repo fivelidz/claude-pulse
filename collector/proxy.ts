@@ -229,19 +229,37 @@ const server = Bun.serve({
   },
 });
 
-console.log(
-  `[claude-pulse] collector proxy listening on http://localhost:${server.port}`,
-);
-console.log(`[claude-pulse] forwarding to ${UPSTREAM}`);
-console.log(`[claude-pulse] logging usage metadata to ${LOG_FILE}`);
-console.log(
-  `[claude-pulse] point your tools at it:  export ANTHROPIC_BASE_URL=http://localhost:${server.port}`,
-);
-
 if (WEB_ENABLED) {
   startWeb(WEB_PORT);
-} else {
-  console.log(
-    `[claude-pulse] tip: add --web to also serve the dashboard in a browser`,
-  );
 }
+
+const line = "─".repeat(58);
+console.log(`
+┌${line}┐
+  ⚡  Claude Pulse collector is running
+${line}
+  1. Point any Claude tool at the proxy:
+
+       export ANTHROPIC_BASE_URL=http://localhost:${server.port}
+
+     (then run Claude Code / opencode / your script as usual)
+${
+  WEB_ENABLED
+    ? `
+  2. Open the dashboard in any browser — including your phone
+     on the same Wi-Fi:
+
+       http://localhost:${WEB_PORT}
+`
+    : `
+  2. See your usage: run the desktop app, or restart with --web
+     to view the dashboard in a browser:
+
+       bun proxy.ts --web    →    http://localhost:${WEB_PORT}
+`
+}
+  Privacy: only metadata is logged (tokens, rate-limit headers,
+  timing). Never prompts, completions, or your API key.
+  Log: ${LOG_FILE}
+└${line}┘
+`);

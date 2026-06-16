@@ -98,6 +98,30 @@ Yes — locally, with no configuration:
 > it can't (and shouldn't) reach anyone's private local server. To actually track
 > your usage, run the collector locally as above.
 
+### "Why can't this be a pure website with no install?"
+
+Short answer: **a browser physically can't see your Claude usage on its own.** A web
+page running JavaScript:
+
+- **cannot intercept another app's network traffic** (Claude Code → Anthropic), so it
+  can't observe your tokens or rate-limit headers;
+- **cannot read local files** like `usage.jsonl` (browser sandbox);
+- **would have to ask for your API key** to call Anthropic itself — which is exactly
+  the credential-harvesting pattern this project refuses to build.
+
+So *something* has to run locally to watch the traffic. The good news: that "something"
+is tiny and the UI is still **just a web page** — the collector serves the dashboard at
+`http://localhost:8788`, which **anyone** can open in any browser (or on their phone over
+their own Wi-Fi). The whole setup is two steps:
+
+```bash
+cd collector && bun install && bun start      # starts proxy + web dashboard
+export ANTHROPIC_BASE_URL=http://localhost:8787   # point your Claude tool at it
+```
+
+Then open `http://localhost:8788`. That's the "works for anybody" path — a local web app,
+not a desktop install, and no credentials ever leave your machine.
+
 ---
 
 ## Finding your per-minute rate limit (the whole point)

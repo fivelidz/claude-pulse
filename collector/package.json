@@ -7,7 +7,8 @@
     "claude-pulse-collector": "./proxy.ts"
   },
   "scripts": {
-    "start": "bun run proxy.ts"
+    "start": "bun run proxy.ts --web",
+    "proxy-only": "bun run proxy.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"
