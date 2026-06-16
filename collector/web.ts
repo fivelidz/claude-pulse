@@ -129,6 +129,7 @@ async function getLiveRatelimit(): Promise<any | null> {
 
 type Raw = {
   t: number;
+  kind?: string; // "request" (default) | "ratelimit" (utilization sample only)
   status?: number;
   input?: number;
   output?: number;
@@ -139,6 +140,7 @@ type Raw = {
   u7d?: number;
   reset5h?: number;
   reset7d?: number;
+  plan?: string;
   model?: string;
 };
 
@@ -183,15 +185,18 @@ function buildSnapshot(lines: Raw[], windowMinutes: number, bucketMinutes = 0) {
     latestU7d = 0,
     latestReset5h = 0,
     latestReset7d = 0,
+    latestPlan: string | undefined,
     latestT = 0;
 
   for (const l of lines) {
+    // Track most-recent rate-limit window values from ANY line type.
     if (l.t > latestT) {
       latestT = l.t;
       if (typeof l.u5h === "number") latestU5h = l.u5h;
       if (typeof l.u7d === "number") latestU7d = l.u7d;
       if (typeof l.reset5h === "number") latestReset5h = l.reset5h;
       if (typeof l.reset7d === "number") latestReset7d = l.reset7d;
+      if (l.plan) latestPlan = l.plan;
     }
     if (l.t < cutoff) continue;
     const minute = Math.floor(l.t / bucketMs) * bucketMs;
@@ -210,14 +215,18 @@ function buildSnapshot(lines: Raw[], windowMinutes: number, bucketMinutes = 0) {
       };
       buckets.set(minute, b);
     }
+    // Utilization samples (kind:"ratelimit") only update the window gauges —
+    // they are NOT requests and carry no tokens.
+    if (typeof l.u5h === "number" && l.u5h > b.u5h) b.u5h = l.u5h;
+    if (typeof l.u7d === "number" && l.u7d > b.u7d) b.u7d = l.u7d;
+    if (l.kind === "ratelimit") continue;
+
     b.input += l.input ?? 0;
     b.output += l.output ?? 0;
     b.cache_read += l.cacheRead ?? 0;
     b.cache_write += l.cacheWrite ?? 0;
     b.requests += 1;
     if (l.rateLimited || l.status === 429) b.rate_limited += 1;
-    if (typeof l.u5h === "number" && l.u5h > b.u5h) b.u5h = l.u5h;
-    if (typeof l.u7d === "number" && l.u7d > b.u7d) b.u7d = l.u7d;
   }
 
   const minutes = [...buckets.values()].sort((a, b) => a.minute - b.minute);
@@ -251,6 +260,7 @@ function buildSnapshot(lines: Raw[], windowMinutes: number, bucketMinutes = 0) {
     latest_u7d: latestU7d,
     reset5h: latestReset5h,
     reset7d: latestReset7d,
+    plan: latestPlan,
     bucket_minutes: bucketMin,
     window_minutes: windowMinutes,
     log_path: LOG_FILE,

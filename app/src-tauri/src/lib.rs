@@ -14,6 +14,8 @@ use std::time::Duration;
 struct RawLine {
     t: i64,
     #[serde(default)]
+    kind: String, // "request" (default) | "ratelimit"
+    #[serde(default)]
     status: i64,
     #[serde(default)]
     input: Option<f64>,
@@ -33,6 +35,8 @@ struct RawLine {
     reset5h: Option<f64>,
     #[serde(rename = "reset7d", default)]
     reset7d: Option<f64>,
+    #[serde(default)]
+    plan: Option<String>,
     #[serde(default)]
     model: Option<String>,
 }
@@ -69,6 +73,8 @@ pub struct Snapshot {
     /// epoch SECONDS when each rolling window resets (0 if unknown)
     reset5h: f64,
     reset7d: f64,
+    /// subscription plan label if known (e.g. "Max 20×")
+    plan: Option<String>,
     /// bucket size used (minutes) + the requested window (minutes)
     bucket_minutes: i64,
     window_minutes: i64,
@@ -141,6 +147,7 @@ fn snapshot(window_minutes: i64, bucket_minutes: Option<i64>) -> Snapshot {
     let mut latest_u7d = 0.0;
     let mut latest_reset5h = 0.0;
     let mut latest_reset7d = 0.0;
+    let mut latest_plan: Option<String> = None;
     let mut latest_t = 0i64;
 
     for l in &lines {
@@ -160,6 +167,9 @@ fn snapshot(window_minutes: i64, bucket_minutes: Option<i64>) -> Snapshot {
                 if let Some(v) = l.reset7d {
                     latest_reset7d = v;
                 }
+                if l.plan.is_some() {
+                    latest_plan = l.plan.clone();
+                }
             }
             continue;
         }
@@ -168,14 +178,7 @@ fn snapshot(window_minutes: i64, bucket_minutes: Option<i64>) -> Snapshot {
             minute,
             ..Default::default()
         });
-        b.input += l.input.unwrap_or(0.0);
-        b.output += l.output.unwrap_or(0.0);
-        b.cache_read += l.cache_read.unwrap_or(0.0);
-        b.cache_write += l.cache_write.unwrap_or(0.0);
-        b.requests += 1;
-        if l.rate_limited || l.status == 429 {
-            b.rate_limited += 1;
-        }
+        // utilization samples update window gauges only
         if let Some(v) = l.u5h {
             if v > b.u5h {
                 b.u5h = v;
@@ -184,6 +187,16 @@ fn snapshot(window_minutes: i64, bucket_minutes: Option<i64>) -> Snapshot {
         if let Some(v) = l.u7d {
             if v > b.u7d {
                 b.u7d = v;
+            }
+        }
+        if l.kind != "ratelimit" {
+            b.input += l.input.unwrap_or(0.0);
+            b.output += l.output.unwrap_or(0.0);
+            b.cache_read += l.cache_read.unwrap_or(0.0);
+            b.cache_write += l.cache_write.unwrap_or(0.0);
+            b.requests += 1;
+            if l.rate_limited || l.status == 429 {
+                b.rate_limited += 1;
             }
         }
         if l.t > latest_t {
@@ -199,6 +212,9 @@ fn snapshot(window_minutes: i64, bucket_minutes: Option<i64>) -> Snapshot {
             }
             if let Some(v) = l.reset7d {
                 latest_reset7d = v;
+            }
+            if l.plan.is_some() {
+                latest_plan = l.plan.clone();
             }
         }
     }
@@ -234,6 +250,7 @@ fn snapshot(window_minutes: i64, bucket_minutes: Option<i64>) -> Snapshot {
         latest_u7d,
         reset5h: latest_reset5h,
         reset7d: latest_reset7d,
+        plan: latest_plan,
         bucket_minutes: bucket_min,
         window_minutes,
         log_path: log_path().to_string_lossy().to_string(),
@@ -253,6 +270,9 @@ fn day_summaries(days: i64) -> Vec<DaySummary> {
     for l in &lines {
         if l.t < cutoff {
             continue;
+        }
+        if l.kind == "ratelimit" {
+            continue; // utilization samples aren't requests
         }
         let day = local_day(l.t);
         let s = day_map.entry(day.clone()).or_insert(DaySummary {

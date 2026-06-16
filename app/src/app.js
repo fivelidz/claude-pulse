@@ -179,15 +179,27 @@ function drawTimeline(s) {
   const pad = { l: 56, r: 14, t: 18, b: 28 };
   const plotW = w - pad.l - pad.r,
     plotH = h - pad.t - pad.b;
-  const mins = s.minutes || [];
+  // The token graph is about REQUESTS — drop buckets that only contain
+  // rate-limit utilization samples (no requests/tokens) so they don't show as
+  // phantom flat-zero bars.
+  const mins = (s.minutes || []).filter(
+    (m) => m.requests > 0 || m.input > 0 || m.output > 0,
+  );
   if (mins.length === 0) {
     tctx.fillStyle = "#7a8294";
     tctx.textAlign = "center";
     tctx.font = "13px ui-monospace, monospace";
     tctx.fillText(
-      "No data yet — route a Claude tool through the collector proxy.",
+      "No token usage yet — route a Claude tool through the proxy",
       w / 2,
-      h / 2,
+      h / 2 - 8,
+    );
+    tctx.fillStyle = "#5a6172";
+    tctx.font = "11px ui-monospace, monospace";
+    tctx.fillText(
+      "export ANTHROPIC_BASE_URL=http://localhost:8787",
+      w / 2,
+      h / 2 + 12,
     );
     return;
   }

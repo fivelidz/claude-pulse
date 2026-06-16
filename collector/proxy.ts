@@ -24,6 +24,7 @@ import { appendFile, mkdir } from "fs/promises";
 import { homedir } from "os";
 import path from "path";
 import { startWeb } from "./web.ts";
+import { startPoller } from "./poller.ts";
 
 const UPSTREAM =
   process.env["CLAUDE_PULSE_UPSTREAM"] ?? "https://api.anthropic.com";
@@ -231,6 +232,17 @@ const server = Bun.serve({
 
 if (WEB_ENABLED) {
   startWeb(WEB_PORT);
+}
+
+// Self-populate the 5h/7d windows by polling a local qalcode2/opencode
+// /ratelimit endpoint (if present) and storing samples — so the dashboard fills
+// in even when your Claude traffic doesn't go through this proxy. Disable with
+// --no-poll or CLAUDE_PULSE_NO_POLL=1.
+const POLL_DISABLED =
+  process.argv.includes("--no-poll") ||
+  process.env["CLAUDE_PULSE_NO_POLL"] === "1";
+if (!POLL_DISABLED) {
+  startPoller(LOG_FILE);
 }
 
 const line = "─".repeat(58);
