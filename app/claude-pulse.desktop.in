@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Claude Pulse
+GenericName=Claude API usage monitor
+Comment=Live Claude API usage — gauge, token graph, 5h/7d rate-limit windows
+# Replace @BIN@ with the path to the built binary, e.g.
+#   app/src-tauri/target/release/claude-pulse
+# or the installed AppImage. Then copy this file (renamed to
+# claude-pulse.desktop) to ~/.local/share/applications/ and ~/Desktop/.
+Exec=@BIN@
+Icon=claude-pulse
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=true
+StartupWMClass=Claude Pulse
