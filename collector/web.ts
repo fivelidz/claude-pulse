@@ -382,7 +382,9 @@ export function startWeb(port: number): void {
       if (p === "/api/snapshot") {
         const minutes = Math.max(
           1,
-          Math.min(60 * 24 * 60, Number(url.searchParams.get("minutes") ?? 60)),
+          // cap at 365 days (frontend max range is 90d; allow headroom so older
+          // imported history is still queryable)
+          Math.min(365 * 24 * 60, Number(url.searchParams.get("minutes") ?? 60)),
         );
         const bucketParam = url.searchParams.get("bucket");
         const bucket = bucketParam ? Number(bucketParam) : 0;
