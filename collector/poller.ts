@@ -20,7 +20,7 @@
 
 import { appendFile } from "fs/promises";
 import { spawnSync } from "child_process";
-import { importOpencodeUsage, opencodeDbExists, opencodeDbPath } from "./opencode-source.ts";
+import { importOpencodeLive, opencodeLiveBase } from "./opencode-live.ts";
 
 export type RatelimitSample = {
   t: number; // epoch ms
@@ -146,18 +146,18 @@ export function startPoller(
           (s.plan ? ` (${s.plan})` : ""),
       );
     }
-    // 2) REAL tokens/min from opencode/qalcode2's local DB (no proxy needed)
-    if (opencodeDbExists()) {
-      const n = await importOpencodeUsage(logFile).catch(() => 0);
-      if (!ocAnnounced) {
-        ocAnnounced = true;
-        console.log(
-          `[claude-pulse] reading token usage from opencode DB: ${opencodeDbPath()}`,
-        );
-      }
-      if (n > 0) {
-        console.log(`[claude-pulse] imported ${n} new token messages`);
-      }
+    // 2) REAL tokens/min from a LIVE opencode/qalcode2 server's HTTP API
+    //    (current data, no proxy needed). This is the accurate, up-to-the-minute
+    //    source — far better than the on-disk DB which can be stale.
+    const n = await importOpencodeLive(logFile).catch(() => 0);
+    if (opencodeLiveBase() && !ocAnnounced) {
+      ocAnnounced = true;
+      console.log(
+        `[claude-pulse] reading live token usage from opencode server: ${opencodeLiveBase()}`,
+      );
+    }
+    if (n > 0) {
+      console.log(`[claude-pulse] imported ${n} new token messages`);
     }
   };
   tick();
