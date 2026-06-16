@@ -30,6 +30,16 @@ async function probeWebApi() {
 }
 
 // ── data access ────────────────────────────────────────────────────────────
+// Trigger a fresh import (Tauri pulls live opencode/qalcode2 token usage). Belt
+// + suspenders alongside the Rust background thread, so the UI always drives an
+// update while it's open even if the timer thread ever stalls.
+async function triggerImport() {
+  if (!invoke) return;
+  try {
+    await invoke("import_usage");
+  } catch {}
+}
+
 async function getSnapshot(windowMinutes) {
   if (invoke)
     return invoke("snapshot", { windowMinutes, bucketMinutes: null });
@@ -297,7 +307,9 @@ function drawTimeline(s) {
     );
   }
   const total = (m) => m.input + m.output;
-  const maxTok = Math.max(...mins.map(total), 1);
+  const rawMax = Math.max(...mins.map(total), 1);
+  // round the y-axis ceiling to a nice number so the range is clear at a glance
+  const maxTok = niceMax(rawMax);
   const maxReq = Math.max(...mins.map((m) => m.requests), 1);
   const n = mins.length;
   const bw = plotW / n;
@@ -318,6 +330,11 @@ function drawTimeline(s) {
     tctx.stroke();
     tctx.fillText(fmt(Math.round((maxTok * (4 - i)) / 4)), pad.l - 6, y + 3);
   }
+  // peak value label (top-right) so the range it reaches is explicit
+  tctx.textAlign = "right";
+  tctx.fillStyle = "#9aa3b5";
+  tctx.font = "10px ui-monospace, monospace";
+  tctx.fillText("peak " + fmt(Math.round(rawMax)) + "/min", w - pad.r, pad.t - 5);
   // y-axis title
   tctx.save();
   tctx.translate(13, pad.t + plotH / 2);
@@ -392,27 +409,36 @@ function drawTimeline(s) {
     tctx.fillRect(x + 1, pad.t + plotH - inH - outH, Math.max(1, bw - 2), outH);
   });
 
-  // total tokens/min trend: filled area + line
-  tctx.beginPath();
-  tctx.moveTo(xMid(0), pad.t + plotH);
-  mins.forEach((m, i) => tctx.lineTo(xMid(i), yOfTok(total(m))));
-  tctx.lineTo(xMid(n - 1), pad.t + plotH);
+  // total tokens/min trend: STEPPED (harsh) — each minute is a flat top across
+  // its bar width with vertical edges, so empty minutes drop hard to zero
+  // instead of sloping. This reads as true per-minute throughput, not a smooth
+  // interpolation that hides the gaps.
+  const baseY = pad.t + plotH;
+  const stepPath = () => {
+    tctx.beginPath();
+    tctx.moveTo(xOfMin(0), baseY);
+    mins.forEach((m, i) => {
+      const yT = yOfTok(total(m));
+      const xL = xOfMin(i),
+        xR = xOfMin(i) + bw;
+      tctx.lineTo(xL, yT); // vertical rise/drop at the left edge
+      tctx.lineTo(xR, yT); // flat across the minute
+    });
+    tctx.lineTo(xOfMin(n - 1) + bw, baseY);
+  };
+  // filled area under the step
+  stepPath();
   tctx.closePath();
-  const grad = tctx.createLinearGradient(0, pad.t, 0, pad.t + plotH);
-  grad.addColorStop(0, "rgba(217,119,87,0.28)");
+  const grad = tctx.createLinearGradient(0, pad.t, 0, baseY);
+  grad.addColorStop(0, "rgba(217,119,87,0.30)");
   grad.addColorStop(1, "rgba(217,119,87,0.02)");
   tctx.fillStyle = grad;
   tctx.fill();
-
+  // the step line itself
   tctx.strokeStyle = "#d97757";
   tctx.lineWidth = 2;
-  tctx.lineJoin = "round";
-  tctx.beginPath();
-  mins.forEach((m, i) => {
-    const x = xMid(i),
-      y = yOfTok(total(m));
-    i === 0 ? tctx.moveTo(x, y) : tctx.lineTo(x, y);
-  });
+  tctx.lineJoin = "miter";
+  stepPath();
   tctx.stroke();
 
   // requests line (secondary, normalized to its own max)
@@ -503,7 +529,7 @@ function drawLimHist(s) {
   // fit to CSS width × dpr
   const dpr = window.devicePixelRatio || 1;
   const cssW = limhist.parentElement.clientWidth;
-  const cssH = 44;
+  const cssH = 58;
   if (limhist.width !== Math.round(cssW * dpr)) {
     limhist.width = Math.round(cssW * dpr);
     limhist.height = Math.round(cssH * dpr);
@@ -512,7 +538,7 @@ function drawLimHist(s) {
   const w = cssW,
     h = cssH;
   lhctx.clearRect(0, 0, w, h);
-  const pad = { l: 4, r: 4, t: 6, b: 12 };
+  const pad = { l: 30, r: 6, t: 5, b: 12 };
   const plotW = w - pad.l - pad.r,
     plotH = h - pad.t - pad.b;
 
@@ -525,19 +551,44 @@ function drawLimHist(s) {
     lhctx.fillText("building history…", w / 2, h / 2);
     return;
   }
-  const t0 = pts[0].minute,
-    t1 = pts[pts.length - 1].minute || t0 + 1;
+  // span the FULL requested window (same time scale as the token graph) so the
+  // axis is meaningful, not just the span of the few samples.
+  const nowMs = Date.now();
+  const winMin = s.window_minutes || rangeMinutes || 60;
+  const t0 = nowMs - winMin * 60000;
+  const t1 = nowMs;
   const x = (t) => pad.l + ((t - t0) / Math.max(1, t1 - t0)) * plotW;
   const y = (frac) => pad.t + plotH - Math.max(0, Math.min(1, frac)) * plotH;
 
-  // gridline at 100%/50%
-  lhctx.strokeStyle = "#232733";
+  // gridlines + % axis labels (0 / 50 / 100)
+  lhctx.strokeStyle = "#1c2029";
   lhctx.lineWidth = 1;
+  lhctx.fillStyle = "#5a6172";
+  lhctx.font = "8px ui-monospace, monospace";
+  lhctx.textAlign = "right";
   for (const g of [0, 0.5, 1]) {
     lhctx.beginPath();
     lhctx.moveTo(pad.l, y(g));
     lhctx.lineTo(w - pad.r, y(g));
     lhctx.stroke();
+    lhctx.fillText(Math.round(g * 100) + "%", pad.l - 4, y(g) + 3);
+  }
+  // time labels along the bottom (match the token graph format)
+  lhctx.textAlign = "center";
+  lhctx.fillStyle = "#5a6172";
+  const bMin = s.bucket_minutes || 1;
+  const tlabel = (ms) => {
+    const d = new Date(ms);
+    if (bMin >= 1440) return d.getMonth() + 1 + "/" + d.getDate();
+    return (
+      String(d.getHours()).padStart(2, "0") +
+      ":" +
+      String(d.getMinutes()).padStart(2, "0")
+    );
+  };
+  for (let k = 0; k <= 4; k++) {
+    const t = t0 + ((t1 - t0) * k) / 4;
+    lhctx.fillText(tlabel(t), x(t), h - 2);
   }
 
   const line = (key, color) => {
@@ -675,7 +726,19 @@ function setReadout(s) {
   setWindow("w7d", s.latest_u7d || 0, s.reset7d || 0);
 
   const planEl = document.getElementById("plan-label");
-  if (planEl) planEl.textContent = s.plan ? "· " + s.plan : "";
+  if (planEl) {
+    // Identify which account/server is the active source. Two Max accounts look
+    // identical in the headers, so we key on the source port and let you name it.
+    let acct = "";
+    const m = (s.source || "").match(/:(\d+)/);
+    if (m) {
+      const port = m[1];
+      const names = JSON.parse(localStorage.getItem("pulse.accts") || "{}");
+      acct = " · " + (names[port] || "acct :" + port);
+    }
+    planEl.textContent = (s.plan ? "· " + s.plan : "") + acct;
+    if (m) planEl.dataset.port = m[1];
+  }
 
   const src = document.getElementById("datasrc");
   if (src)
@@ -696,6 +759,7 @@ function renderAll() {
 
 async function tick() {
   try {
+    triggerImport(); // fire-and-forget: keep the log fresh while the UI is open
     const s = await getSnapshot(rangeMinutes);
     if (s) {
       // The snapshot's latest_u5h/u7d come from the log (the backend importer
@@ -708,6 +772,7 @@ async function tick() {
         if (liveRl.reset5h) s.reset5h = liveRl.reset5h;
         if (liveRl.reset7d) s.reset7d = liveRl.reset7d;
         if (liveRl.plan && !s.plan) s.plan = liveRl.plan;
+        if (liveRl.source) s.source = liveRl.source; // which server/account
       }
       // carry forward the last good limits so they never blink to empty
       if (s.latest_u5h > 0) lastGoodU5h = s.latest_u5h;
@@ -946,6 +1011,28 @@ showVersion();
 
 // ── widget mode (compact, gauge only) ────────────────────────────────────────
 let widgetMode = false;
+// Click the plan/account label to name the active account (handy with multiple
+// Claude Max accounts — stored locally, keyed by the server port).
+{
+  const planEl = document.getElementById("plan-label");
+  if (planEl) {
+    planEl.style.cursor = "pointer";
+    planEl.title = "click to name this account";
+    planEl.addEventListener("click", () => {
+      const port = planEl.dataset.port;
+      if (!port) return;
+      const names = JSON.parse(localStorage.getItem("pulse.accts") || "{}");
+      const cur = names[port] || "";
+      const name = prompt(`Name for account on port ${port}:`, cur);
+      if (name !== null) {
+        names[port] = name.trim();
+        localStorage.setItem("pulse.accts", JSON.stringify(names));
+        if (snap) setReadout(snap);
+      }
+    });
+  }
+}
+
 document.getElementById("widgetBtn").addEventListener("click", async () => {
   widgetMode = !widgetMode;
   document.body.classList.toggle("widget", widgetMode);
