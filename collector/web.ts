@@ -460,7 +460,7 @@ export function startWeb(port: number): void {
 if (import.meta.main) {
   const portArg = process.argv[2];
   const port = Number(
-    portArg ?? process.env["CLAUDE_PULSE_WEB_PORT"] ?? 8788,
+    portArg ?? process.env["CLAUDE_PULSE_WEB_PORT"] ?? 47822,
   );
   // sanity-check app dir exists
   try {

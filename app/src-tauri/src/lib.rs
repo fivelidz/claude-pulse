@@ -539,6 +539,231 @@ fn split_url(url: &str) -> Option<(String, u16, String)> {
     Some((host, port, path.to_string()))
 }
 
+// ── self-sufficient opencode/qalcode2 token importer (no collector needed) ───
+// The desktop app pulls per-message token usage straight from a running
+// opencode/qalcode2 server's HTTP API and appends it to usage.jsonl, so just
+// launching the app populates the tokens/min graph — no separate collector.
+
+use std::collections::HashSet;
+use std::sync::Mutex;
+
+// msgIds we've already written, so we never double-count across imports.
+static SEEN_MSGS: std::sync::OnceLock<Mutex<HashSet<String>>> = std::sync::OnceLock::new();
+static LAST_IMPORT_MS: std::sync::OnceLock<Mutex<i64>> = std::sync::OnceLock::new();
+
+/// HTTP GET that reads a (possibly large) body to EOF with a generous timeout.
+fn http_get_big(host: &str, port: u16, path: &str, timeout_ms: u64) -> Option<Vec<u8>> {
+    let addr: std::net::SocketAddr = format!("{host}:{port}").parse().ok()?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(1000)).ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(timeout_ms)))
+        .ok()?;
+    let req = format!(
+        "GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\nAccept: application/json\r\n\r\n"
+    );
+    stream.write_all(req.as_bytes()).ok()?;
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).ok()?;
+    // split headers/body at the first blank line
+    let sep = b"\r\n\r\n";
+    let pos = buf.windows(4).position(|w| w == sep)?;
+    Some(buf[pos + 4..].to_vec())
+}
+
+/// Find the freshest opencode server port (newest /ratelimit `at`).
+fn freshest_opencode_port() -> Option<u16> {
+    if let Ok(url) = std::env::var("CLAUDE_PULSE_OPENCODE_URL") {
+        // host:port → port
+        if let Some((_h, port, _p)) = split_url(&url) {
+            return Some(port);
+        }
+    }
+    let now = now_ms() as f64;
+    let mut best: Option<(u16, f64)> = None;
+    for port in local_listen_ports() {
+        if let Some(body) = http_get("127.0.0.1", port, "/ratelimit", 700) {
+            if let Ok(j) = serde_json::from_str::<serde_json::Value>(&body) {
+                // must look like a ratelimit snapshot
+                if j.get("unified5hUtilization").is_some() || j.get("unified7dUtilization").is_some()
+                {
+                    let at = j.get("at").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    if now - at <= 5.0 * 60_000.0 {
+                        if best.map(|(_, b)| at > b).unwrap_or(true) {
+                            best = Some((port, at));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    best.map(|(p, _)| p)
+}
+
+/// Pull new assistant-message token counts from the freshest opencode server and
+/// append them to usage.jsonl. Returns the number of new lines written.
+/// Throttled so it runs at most once every few seconds.
+fn import_opencode_tokens() -> usize {
+    let last = LAST_IMPORT_MS.get_or_init(|| Mutex::new(0));
+    let now = now_ms();
+    {
+        let mut g = last.lock().unwrap();
+        if now - *g < 4000 {
+            return 0;
+        }
+        *g = now;
+    }
+    let Some(port) = freshest_opencode_port() else {
+        return 0;
+    };
+
+    // list sessions
+    let Some(sbody) = http_get_big("127.0.0.1", port, "/session", 2500) else {
+        return 0;
+    };
+    let Ok(sessions) = serde_json::from_slice::<serde_json::Value>(&sbody) else {
+        return 0;
+    };
+    let Some(arr) = sessions.as_array() else {
+        return 0;
+    };
+    // newest sessions first
+    let mut sess: Vec<&serde_json::Value> = arr.iter().collect();
+    sess.sort_by(|a, b| {
+        let ta = a
+            .get("time")
+            .and_then(|t| t.get("updated"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let tb = b
+            .get("time")
+            .and_then(|t| t.get("updated"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        tb.partial_cmp(&ta).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let seen = SEEN_MSGS.get_or_init(|| Mutex::new(HashSet::new()));
+    // First run scans more sessions to backfill; later runs just the active few.
+    let first_run = seen.lock().unwrap().is_empty();
+    let scan_n = if first_run { 12 } else { 3 };
+
+    let mut new_lines: Vec<String> = Vec::new();
+    for s in sess.into_iter().take(scan_n) {
+        let Some(sid) = s.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let path = format!("/session/{sid}/message");
+        let Some(mbody) = http_get_big("127.0.0.1", port, &path, 3000) else {
+            continue;
+        };
+        let Ok(msgs) = serde_json::from_slice::<serde_json::Value>(&mbody) else {
+            continue;
+        };
+        let Some(marr) = msgs.as_array() else {
+            continue;
+        };
+        for item in marr {
+            // message may be {info:{...}} or flat
+            let m = item.get("info").unwrap_or(item);
+            if m.get("role").and_then(|v| v.as_str()) != Some("assistant") {
+                continue;
+            }
+            let Some(id) = m.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            // only finalized messages (tokens trustworthy on completion)
+            let completed = m
+                .get("time")
+                .and_then(|t| t.get("completed"))
+                .is_some();
+            if !completed {
+                continue;
+            }
+            let tk = m.get("tokens");
+            let input = tk
+                .and_then(|t| t.get("input"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let output = tk
+                .and_then(|t| t.get("output"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let cache_read = tk
+                .and_then(|t| t.get("cache"))
+                .and_then(|c| c.get("read"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let cache_write = tk
+                .and_then(|t| t.get("cache"))
+                .and_then(|c| c.get("write"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            if input + output + cache_read + cache_write == 0.0 {
+                continue;
+            }
+            {
+                let mut sg = seen.lock().unwrap();
+                if sg.contains(id) {
+                    continue;
+                }
+                sg.insert(id.to_string());
+            }
+            let t = m
+                .get("time")
+                .and_then(|tt| tt.get("completed"))
+                .and_then(|v| v.as_f64())
+                .or_else(|| {
+                    m.get("time")
+                        .and_then(|tt| tt.get("created"))
+                        .and_then(|v| v.as_f64())
+                })
+                .unwrap_or(now as f64) as i64;
+            let model = m
+                .get("modelID")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let line = serde_json::json!({
+                "t": t,
+                "kind": "request",
+                "status": 200,
+                "input": input,
+                "output": output,
+                "cacheRead": cache_read,
+                "cacheWrite": cache_write,
+                "rateLimited": false,
+                "durationMs": 0,
+                "source": "opencode-live-rust",
+                "msgId": id,
+            });
+            new_lines.push(line.to_string());
+        }
+    }
+
+    if new_lines.is_empty() {
+        return 0;
+    }
+    // append to the log
+    use std::io::Write as _;
+    if let Some(parent) = log_path().parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path())
+    {
+        let _ = f.write_all((new_lines.join("\n") + "\n").as_bytes());
+    }
+    new_lines.len()
+}
+
+/// Tauri command: trigger an import (called by the frontend on its poll loop).
+#[tauri::command]
+fn import_usage() -> usize {
+    import_opencode_tokens()
+}
+
 /// App version (from Cargo.toml) so the UI can show which build is running.
 #[tauri::command]
 fn app_version() -> String {
@@ -560,12 +785,21 @@ pub fn run() {
                     let _ = win.set_icon(img);
                 }
             }
+            // Launch the backend ourselves: a thread that pulls live opencode/
+            // qalcode2 token usage into the log every few seconds. This makes the
+            // app self-sufficient — opening it populates the graph, no separate
+            // collector process required.
+            std::thread::spawn(|| loop {
+                let _ = import_opencode_tokens();
+                std::thread::sleep(Duration::from_secs(5));
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             snapshot,
             day_summaries,
             ratelimit,
+            import_usage,
             app_version
         ])
         .run(tauri::generate_context!())

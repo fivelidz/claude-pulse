@@ -29,12 +29,13 @@ import { startGmuxExport } from "./gmux-export.ts";
 
 const UPSTREAM =
   process.env["CLAUDE_PULSE_UPSTREAM"] ?? "https://api.anthropic.com";
-const PORT = Number(process.env["CLAUDE_PULSE_PORT"] ?? 8787);
-// Optional local web dashboard (`--web` flag or CLAUDE_PULSE_WEB=1). Lets you
-// view usage in a browser with no Tauri app. Default port 8788.
+// Obscure default ports (47821/47822) to avoid clashing with other Claude
+// tooling that commonly grabs 8787/8788/3000-range ports.
+const PORT = Number(process.env["CLAUDE_PULSE_PORT"] ?? 47821);
+// Optional local web dashboard (`--web` flag or CLAUDE_PULSE_WEB=1).
 const WEB_ENABLED =
   process.argv.includes("--web") || process.env["CLAUDE_PULSE_WEB"] === "1";
-const WEB_PORT = Number(process.env["CLAUDE_PULSE_WEB_PORT"] ?? 8788);
+const WEB_PORT = Number(process.env["CLAUDE_PULSE_WEB_PORT"] ?? 47822);
 const DATA_DIR = path.join(
   process.env["XDG_DATA_HOME"] ?? path.join(homedir(), ".local", "share"),
   "claude-pulse",

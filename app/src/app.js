@@ -269,7 +269,7 @@ function drawTimeline(s) {
     tctx.fillStyle = "#5a6172";
     tctx.font = "11px ui-monospace, monospace";
     tctx.fillText(
-      "export ANTHROPIC_BASE_URL=http://localhost:8787",
+      "export ANTHROPIC_BASE_URL=http://localhost:47821",
       w / 2,
       h / 2 + 12,
     );
