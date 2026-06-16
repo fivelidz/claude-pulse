@@ -25,6 +25,7 @@ import { homedir } from "os";
 import path from "path";
 import { startWeb } from "./web.ts";
 import { startPoller } from "./poller.ts";
+import { startGmuxExport } from "./gmux-export.ts";
 
 const UPSTREAM =
   process.env["CLAUDE_PULSE_UPSTREAM"] ?? "https://api.anthropic.com";
@@ -243,6 +244,20 @@ const POLL_DISABLED =
   process.env["CLAUDE_PULSE_NO_POLL"] === "1";
 if (!POLL_DISABLED) {
   startPoller(LOG_FILE);
+}
+
+// Optional gmux integration: write a .opencode/claude-pulse.json sidecar so a
+// "claude-pulse" status item can show in gmux. Enable with --gmux [projectDir]
+// or CLAUDE_PULSE_GMUX=1 (project dir from CLAUDE_PULSE_PROJECT or cwd).
+const GMUX_ENABLED =
+  process.argv.includes("--gmux") || process.env["CLAUDE_PULSE_GMUX"] === "1";
+if (GMUX_ENABLED) {
+  const gi = process.argv.indexOf("--gmux");
+  const dir =
+    gi >= 0 && process.argv[gi + 1] && !process.argv[gi + 1].startsWith("--")
+      ? process.argv[gi + 1]
+      : undefined;
+  startGmuxExport(dir);
 }
 
 const line = "─".repeat(58);
