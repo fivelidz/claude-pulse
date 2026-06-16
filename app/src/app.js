@@ -759,7 +759,6 @@ function renderAll() {
 
 async function tick() {
   try {
-    triggerImport(); // fire-and-forget: keep the log fresh while the UI is open
     const s = await getSnapshot(rangeMinutes);
     if (s) {
       // The snapshot's latest_u5h/u7d come from the log (the backend importer

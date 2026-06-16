@@ -826,6 +826,15 @@ fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// Debug helper: print the 60-min snapshot as JSON and exit. Run with
+/// `claude-pulse --debug-snapshot`.
+pub fn debug_snapshot() {
+    let n = import_opencode_tokens();
+    eprintln!("[debug] imported {n} lines");
+    let s = snapshot(60, None);
+    println!("{}", serde_json::to_string_pretty(&s).unwrap());
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
