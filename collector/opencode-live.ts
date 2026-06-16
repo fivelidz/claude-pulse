@@ -161,6 +161,7 @@ export async function importOpencodeLive(
           output: tk.output,
           cacheRead: tk.cacheRead,
           cacheWrite: tk.cacheWrite,
+          cost: Number(m?.cost ?? 0),
           model: m?.modelID ?? m?.model ?? undefined,
           rateLimited: false,
           durationMs: 0,

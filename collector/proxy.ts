@@ -65,6 +65,9 @@ type LogLine = {
   retryAfter?: number;
   rateLimited: boolean;
   durationMs: number;
+  // wire bytes transferred (request body sent → Anthropic, response body received)
+  bytesIn?: number; // request body bytes (you → Anthropic)
+  bytesOut?: number; // response body bytes (Anthropic → you)
 };
 
 async function logLine(line: LogLine) {
@@ -136,11 +139,25 @@ const server = Bun.serve({
     const url = new URL(req.url);
     const target = UPSTREAM + url.pathname + url.search;
 
+    // Count request-body bytes (you → Anthropic) as they stream through, without
+    // buffering. A passthrough TransformStream tallies each chunk's byte length.
+    let bytesIn = 0;
+    let forwardBody: BodyInit | null | undefined = req.body;
+    if (req.body) {
+      const counter = new TransformStream({
+        transform(chunk, controller) {
+          bytesIn += chunk?.byteLength ?? 0;
+          controller.enqueue(chunk);
+        },
+      });
+      forwardBody = req.body.pipeThrough(counter);
+    }
+
     // Forward request untouched (headers + body stream).
     const upstreamReq = new Request(target, {
       method: req.method,
       headers: req.headers,
-      body: req.body,
+      body: forwardBody,
       // @ts-ignore Bun duplex for streaming bodies
       duplex: "half",
     });
@@ -190,6 +207,7 @@ const server = Bun.serve({
       (async () => {
         try {
           const text = await new Response(inspectStream).text();
+          const bytesOut = Buffer.byteLength(text, "utf8");
           const usage = contentType.includes("event-stream")
             ? extractUsageFromSSE(text)
             : extractUsageFromBody(text);
@@ -198,6 +216,8 @@ const server = Bun.serve({
             kind: "request",
             status: resp.status,
             durationMs: Date.now() - started,
+            bytesIn,
+            bytesOut,
             ...base,
             ...usage,
           } as LogLine);
@@ -207,6 +227,7 @@ const server = Bun.serve({
             kind: "request",
             status: resp.status,
             durationMs: Date.now() - started,
+            bytesIn,
             ...base,
           } as LogLine);
         }
@@ -224,6 +245,7 @@ const server = Bun.serve({
       kind: "request",
       status: resp.status,
       durationMs: Date.now() - started,
+      bytesIn,
       ...base,
     } as LogLine);
 

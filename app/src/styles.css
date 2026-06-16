@@ -357,6 +357,26 @@ main.view.active {
 .metric.warn .val {
   color: var(--rl);
 }
+.metric .sublabel {
+  color: var(--muted);
+  font-size: 10px;
+  opacity: 0.75;
+}
+
+/* data-transfer / efficiency tiles (4 across) */
+.xfergrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+.xfergrid .metric .val {
+  font-size: 22px;
+}
+@media (max-width: 720px) {
+  .xfergrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
 
 /* ── rolling windows (5h / 7d) ─────────────────────────── */
 .winrow {

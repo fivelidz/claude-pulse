@@ -25,6 +25,12 @@ struct RawLine {
     cache_read: Option<f64>,
     #[serde(rename = "cacheWrite", default)]
     cache_write: Option<f64>,
+    #[serde(rename = "bytesIn", default)]
+    bytes_in: Option<f64>,
+    #[serde(rename = "bytesOut", default)]
+    bytes_out: Option<f64>,
+    #[serde(default)]
+    cost: Option<f64>,
     #[serde(rename = "rateLimited", default)]
     rate_limited: bool,
     #[serde(default)]
@@ -49,6 +55,9 @@ pub struct MinuteBucket {
     output: f64,
     cache_read: f64,
     cache_write: f64,
+    bytes_in: f64,
+    bytes_out: f64,
+    cost: f64,
     requests: u32,
     rate_limited: u32,
     /// max unified 5h utilization seen in this minute (0..1)
@@ -75,6 +84,10 @@ pub struct Snapshot {
     reset7d: f64,
     /// subscription plan label if known (e.g. "Max 20×")
     plan: Option<String>,
+    /// totals across the window
+    total_bytes_in: f64,
+    total_bytes_out: f64,
+    total_cost: f64,
     /// bucket size used (minutes) + the requested window (minutes)
     bucket_minutes: i64,
     window_minutes: i64,
@@ -194,6 +207,9 @@ fn snapshot(window_minutes: i64, bucket_minutes: Option<i64>) -> Snapshot {
             b.output += l.output.unwrap_or(0.0);
             b.cache_read += l.cache_read.unwrap_or(0.0);
             b.cache_write += l.cache_write.unwrap_or(0.0);
+            b.bytes_in += l.bytes_in.unwrap_or(0.0);
+            b.bytes_out += l.bytes_out.unwrap_or(0.0);
+            b.cost += l.cost.unwrap_or(0.0);
             b.requests += 1;
             if l.rate_limited || l.status == 429 {
                 b.rate_limited += 1;
@@ -226,6 +242,9 @@ fn snapshot(window_minutes: i64, bucket_minutes: Option<i64>) -> Snapshot {
     let mut peak_requests = 0u32;
     let mut peak_requests_minute = 0i64;
     let mut rate_limited_total = 0u32;
+    let mut total_bytes_in = 0.0;
+    let mut total_bytes_out = 0.0;
+    let mut total_cost = 0.0;
     for b in &minutes {
         let tok = b.input + b.output;
         if tok > peak_tokens {
@@ -237,6 +256,9 @@ fn snapshot(window_minutes: i64, bucket_minutes: Option<i64>) -> Snapshot {
             peak_requests_minute = b.minute;
         }
         rate_limited_total += b.rate_limited;
+        total_bytes_in += b.bytes_in;
+        total_bytes_out += b.bytes_out;
+        total_cost += b.cost;
     }
 
     Snapshot {
@@ -251,6 +273,9 @@ fn snapshot(window_minutes: i64, bucket_minutes: Option<i64>) -> Snapshot {
         reset5h: latest_reset5h,
         reset7d: latest_reset7d,
         plan: latest_plan,
+        total_bytes_in,
+        total_bytes_out,
+        total_cost,
         bucket_minutes: bucket_min,
         window_minutes,
         log_path: log_path().to_string_lossy().to_string(),

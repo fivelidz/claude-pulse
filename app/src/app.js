@@ -498,6 +498,28 @@ function setReadout(s) {
   document.getElementById("r-total").textContent = fmt(Math.round(totalTok));
   document.getElementById("r-reqtot").textContent = fmt(totalReq);
 
+  // data transfer + efficiency
+  const mins = s.minutes || [];
+  const bIn = s.total_bytes_in ?? mins.reduce((a, m) => a + (m.bytes_in || 0), 0);
+  const bOut =
+    s.total_bytes_out ?? mins.reduce((a, m) => a + (m.bytes_out || 0), 0);
+  const totalInput = mins.reduce((a, m) => a + (m.input || 0), 0);
+  const totalCacheRead = mins.reduce((a, m) => a + (m.cache_read || 0), 0);
+  const cost = s.total_cost ?? mins.reduce((a, m) => a + (m.cost || 0), 0);
+  const setTxt = (id, v) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = v;
+  };
+  setTxt("r-bytesin", bIn > 0 ? fmtBytes(bIn) : "–");
+  setTxt("r-bytesout", bOut > 0 ? fmtBytes(bOut) : "–");
+  // cache hit rate = cache_read / (cache_read + fresh input)
+  const cacheBase = totalCacheRead + totalInput;
+  setTxt(
+    "r-cachehit",
+    cacheBase > 0 ? Math.round((totalCacheRead / cacheBase) * 100) + "%" : "–",
+  );
+  setTxt("r-cost", cost > 0 ? "$" + cost.toFixed(2) : "–");
+
   setWindow("w5h", s.latest_u5h || 0, s.reset5h || 0);
   setWindow("w7d", s.latest_u7d || 0, s.reset7d || 0);
 
@@ -801,6 +823,13 @@ function fmt(n) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
   if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
   return String(n);
+}
+
+function fmtBytes(n) {
+  if (n >= 1 << 30) return (n / (1 << 30)).toFixed(2) + " GB";
+  if (n >= 1 << 20) return (n / (1 << 20)).toFixed(1) + " MB";
+  if (n >= 1 << 10) return (n / (1 << 10)).toFixed(1) + " KB";
+  return n + " B";
 }
 
 // ── demo data (browser dev only, no backend) ─────────────────────────────────

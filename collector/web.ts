@@ -135,6 +135,9 @@ type Raw = {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  bytesIn?: number;
+  bytesOut?: number;
+  cost?: number;
   rateLimited?: boolean;
   u5h?: number;
   u7d?: number;
@@ -208,6 +211,9 @@ function buildSnapshot(lines: Raw[], windowMinutes: number, bucketMinutes = 0) {
         output: 0,
         cache_read: 0,
         cache_write: 0,
+        bytes_in: 0,
+        bytes_out: 0,
+        cost: 0,
         requests: 0,
         rate_limited: 0,
         u5h: 0,
@@ -225,6 +231,9 @@ function buildSnapshot(lines: Raw[], windowMinutes: number, bucketMinutes = 0) {
     b.output += l.output ?? 0;
     b.cache_read += l.cacheRead ?? 0;
     b.cache_write += l.cacheWrite ?? 0;
+    b.bytes_in += l.bytesIn ?? 0;
+    b.bytes_out += l.bytesOut ?? 0;
+    b.cost += l.cost ?? 0;
     b.requests += 1;
     if (l.rateLimited || l.status === 429) b.rate_limited += 1;
   }
@@ -235,7 +244,10 @@ function buildSnapshot(lines: Raw[], windowMinutes: number, bucketMinutes = 0) {
     peak_minute = 0,
     peak_requests = 0,
     peak_requests_minute = 0,
-    rate_limited_total = 0;
+    rate_limited_total = 0,
+    total_bytes_in = 0,
+    total_bytes_out = 0,
+    total_cost = 0;
   for (const b of minutes) {
     const tok = b.input + b.output;
     if (tok > peak_tokens) {
@@ -247,6 +259,9 @@ function buildSnapshot(lines: Raw[], windowMinutes: number, bucketMinutes = 0) {
       peak_requests_minute = b.minute;
     }
     rate_limited_total += b.rate_limited;
+    total_bytes_in += b.bytes_in;
+    total_bytes_out += b.bytes_out;
+    total_cost += b.cost;
   }
 
   return {
@@ -256,6 +271,9 @@ function buildSnapshot(lines: Raw[], windowMinutes: number, bucketMinutes = 0) {
     peak_requests,
     peak_requests_minute,
     rate_limited_total,
+    total_bytes_in,
+    total_bytes_out,
+    total_cost,
     latest_u5h: latestU5h,
     latest_u7d: latestU7d,
     reset5h: latestReset5h,
@@ -287,6 +305,7 @@ function buildDays(lines: Raw[], days: number) {
 
   for (const l of lines) {
     if (l.t < cutoff) continue;
+    if (l.kind === "ratelimit") continue; // utilization samples aren't requests
     const day = localDay(l.t);
     let s = dayMap.get(day);
     if (!s) {
@@ -296,6 +315,9 @@ function buildDays(lines: Raw[], days: number) {
         output: 0,
         cache_read: 0,
         cache_write: 0,
+        bytes_in: 0,
+        bytes_out: 0,
+        cost: 0,
         requests: 0,
         rate_limited: 0,
         peak_tpm: 0,
@@ -308,6 +330,9 @@ function buildDays(lines: Raw[], days: number) {
     s.output += out;
     s.cache_read += l.cacheRead ?? 0;
     s.cache_write += l.cacheWrite ?? 0;
+    s.bytes_in += l.bytesIn ?? 0;
+    s.bytes_out += l.bytesOut ?? 0;
+    s.cost += l.cost ?? 0;
     s.requests += 1;
     if (l.rateLimited || l.status === 429) s.rate_limited += 1;
     const minute = Math.floor(l.t / MIN_MS) * MIN_MS;

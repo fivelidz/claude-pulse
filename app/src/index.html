@@ -60,6 +60,30 @@
         </div>
       </section>
 
+      <!-- DATA TRANSFER + EFFICIENCY -->
+      <section class="card xfergrid">
+        <div class="metric">
+          <span class="label">↑ Sent to Anthropic</span>
+          <span id="r-bytesin" class="val">–</span>
+          <span class="sublabel">request bytes (window)</span>
+        </div>
+        <div class="metric">
+          <span class="label">↓ Received</span>
+          <span id="r-bytesout" class="val">–</span>
+          <span class="sublabel">response bytes (window)</span>
+        </div>
+        <div class="metric">
+          <span class="label">Cache hit rate</span>
+          <span id="r-cachehit" class="val">–</span>
+          <span class="sublabel">cache-read ÷ input</span>
+        </div>
+        <div class="metric">
+          <span class="label">Est. cost</span>
+          <span id="r-cost" class="val">–</span>
+          <span class="sublabel">this window (if known)</span>
+        </div>
+      </section>
+
       <!-- ROLLING-WINDOW LIMITS: 5h (session) + 7d (weekly) utilization -->
       <section class="card windows">
         <h2>Usage limits <span class="sub" id="plan-label"></span></h2>
