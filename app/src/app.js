@@ -31,7 +31,8 @@ async function probeWebApi() {
 
 // ── data access ────────────────────────────────────────────────────────────
 async function getSnapshot(windowMinutes) {
-  if (invoke) return invoke("snapshot", { windowMinutes });
+  if (invoke)
+    return invoke("snapshot", { windowMinutes, bucketMinutes: null });
   if (await probeWebApi()) {
     try {
       const r = await fetch(`/api/snapshot?minutes=${windowMinutes}`, {
@@ -41,6 +42,29 @@ async function getSnapshot(windowMinutes) {
     } catch {}
   }
   return demoSnapshot(windowMinutes);
+}
+
+// Live rate-limit snapshot from qalcode2 (real 5h/7d % + reset times).
+// Tauri: the Rust `ratelimit` command polls qalcode2's /ratelimit directly.
+// Web: the collector exposes /api/ratelimit doing the same.
+async function getLiveRatelimit() {
+  if (invoke) {
+    try {
+      const j = await invoke("ratelimit");
+      if (j && j.available !== false && j.available !== undefined) return j;
+    } catch {}
+    return null;
+  }
+  if (await probeWebApi()) {
+    try {
+      const r = await fetch("/api/ratelimit", { cache: "no-store" });
+      if (r.ok) {
+        const j = await r.json();
+        if (j && j.available !== false) return j;
+      }
+    } catch {}
+  }
+  return null;
 }
 async function getDays(days) {
   if (invoke) return invoke("day_summaries", { days });
@@ -199,19 +223,38 @@ function drawTimeline(s) {
   tctx.fillText("tokens / min", 0, 0);
   tctx.restore();
 
-  // x-axis time labels (HH:MM)
+  // x-axis labels — format depends on the bucket/range scale:
+  //   per-minute/15m  → HH:MM
+  //   hourly          → "Mon HH:00"
+  //   daily           → "M/D"
+  const bucketMin = s.bucket_minutes || 1;
   tctx.textAlign = "center";
   tctx.fillStyle = "#7a8294";
   tctx.font = "10px ui-monospace, monospace";
-  const ticks = Math.min(6, n);
-  for (let t = 0; t < ticks; t++) {
-    const i = Math.round((t * (n - 1)) / Math.max(1, ticks - 1));
-    const d = new Date(mins[i].minute);
-    const label =
+  const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const fmtTick = (ms) => {
+    const d = new Date(ms);
+    if (bucketMin >= 1440) {
+      return d.getMonth() + 1 + "/" + d.getDate();
+    }
+    if (bucketMin >= 60) {
+      return (
+        DOW[d.getDay()] +
+        " " +
+        String(d.getHours()).padStart(2, "0") +
+        ":00"
+      );
+    }
+    return (
       String(d.getHours()).padStart(2, "0") +
       ":" +
-      String(d.getMinutes()).padStart(2, "0");
-    tctx.fillText(label, xMid(i), pad.t + plotH + 18);
+      String(d.getMinutes()).padStart(2, "0")
+    );
+  };
+  const ticks = Math.min(bucketMin >= 1440 ? 8 : 6, n);
+  for (let t = 0; t < ticks; t++) {
+    const i = Math.round((t * (n - 1)) / Math.max(1, ticks - 1));
+    tctx.fillText(fmtTick(mins[i].minute), xMid(i), pad.t + plotH + 18);
   }
 
   // stacked input/output bars
@@ -366,6 +409,9 @@ function setReadout(s) {
   setWindow("w5h", s.latest_u5h || 0, s.reset5h || 0);
   setWindow("w7d", s.latest_u7d || 0, s.reset7d || 0);
 
+  const planEl = document.getElementById("plan-label");
+  if (planEl) planEl.textContent = s.plan ? "· " + s.plan : "";
+
   const src = document.getElementById("datasrc");
   if (src)
     src.textContent = s.has_data
@@ -385,6 +431,15 @@ function renderAll() {
 
 async function tick() {
   snap = await getSnapshot(rangeMinutes);
+  // Prefer the live qalcode2 rate-limit snapshot for the 5h/7d windows + resets.
+  const live = await getLiveRatelimit();
+  if (live) {
+    if (live.u5h != null) snap.latest_u5h = live.u5h;
+    if (live.u7d != null) snap.latest_u7d = live.u7d;
+    if (live.reset5h) snap.reset5h = live.reset5h;
+    if (live.reset7d) snap.reset7d = live.reset7d;
+    snap.plan = live.plan;
+  }
   setReadout(snap);
   drawTimeline(snap);
   const last = (snap.minutes || []).at(-1);
@@ -468,13 +523,31 @@ const rangeLabel = {
   360: "last 6 h",
   720: "last 12 h",
   1440: "last 24 h",
+  4320: "last 3 days",
+  10080: "last 7 days",
+  43200: "last 30 days",
+  129600: "last 90 days",
 };
-rangeSelect.addEventListener("change", async () => {
-  rangeMinutes = Number(rangeSelect.value);
+async function applyRange(minutes) {
+  rangeMinutes = minutes;
+  rangeSelect.value = String(minutes);
   document.getElementById("graph-range").textContent =
     "(" + (rangeLabel[rangeMinutes] || rangeMinutes + " min") + ")";
   await tick();
-});
+}
+rangeSelect.addEventListener("change", () => applyRange(Number(rangeSelect.value)));
+
+// Deep-link the range via URL hash (e.g. #range=10080) — shareable + lets the
+// headless renderer/preview open a specific scale.
+function rangeFromHash() {
+  const m = location.hash.match(/range=(\d+)/);
+  if (m) {
+    const v = Number(m[1]);
+    if (v > 0) applyRange(v);
+  }
+}
+window.addEventListener("hashchange", rangeFromHash);
+rangeFromHash();
 
 // ── widget mode (compact, gauge only) ────────────────────────────────────────
 let widgetMode = false;

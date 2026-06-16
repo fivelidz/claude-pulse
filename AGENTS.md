@@ -55,7 +55,16 @@ gauge. Two parts: a **Bun proxy collector** and a **Tauri desktop app**. See REA
 - Data file: `~/.local/share/claude-pulse/usage.jsonl` (XDG data dir). One JSON object
   per line. Schema in `collector/proxy.ts` (`LogLine`) and `app/src-tauri/src/lib.rs`
   (`RawLine`). **If you change the schema, update BOTH and keep it backward-compatible**
-  (all fields optional on read).
+  (all fields optional on read). Reset timestamps (`reset5h`/`reset7d`, epoch seconds)
+  flow through `Snapshot` for the "resets in" countdowns.
+- **Live rate-limit source:** when a qalcode2/opencode server is running it serves the
+  real Anthropic unified snapshot at `GET <server>/ratelimit` (`unified5hUtilization`,
+  `unified5hReset`, `unified7dUtilization`, `unified7dReset` epoch seconds, `planLabel`).
+  Both the Rust `ratelimit` command (`lib.rs`, dependency-free TCP GET + `ss` port
+  discovery) and the collector web mode (`/api/ratelimit`) read it and overlay it onto
+  the snapshot's 5h/7d values. Override the URL with `CLAUDE_PULSE_RATELIMIT_URL`.
+- **Graph time scales:** `snapshot(window_minutes, bucket_minutes)` auto-buckets
+  (per-minute ≤6h, 15m ≤3d, hourly ≤14d, daily beyond). Frontend ranges go to 90 days.
 - The frontend is auth-aware-agnostic: it just renders whatever aggregates the backend
   returns. OAuth users get `u5h`/`u7d` populated; API-key users get `tokensRemaining`.
 - Tauri command names use snake_case in Rust but are invoked camelCase-arg from JS

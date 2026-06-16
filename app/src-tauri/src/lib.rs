@@ -5,7 +5,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 struct RawLine {
@@ -66,6 +69,9 @@ pub struct Snapshot {
     /// epoch SECONDS when each rolling window resets (0 if unknown)
     reset5h: f64,
     reset7d: f64,
+    /// bucket size used (minutes) + the requested window (minutes)
+    bucket_minutes: i64,
+    window_minutes: i64,
     /// log file path (for the UI to show)
     log_path: String,
     /// whether the log file exists
@@ -102,12 +108,33 @@ fn read_lines() -> Vec<RawLine> {
 
 const MIN_MS: i64 = 60_000;
 
-/// Aggregate the last `window_minutes` of activity into per-minute buckets.
+/// Aggregate the last `window_minutes` of activity into time buckets.
+///
+/// `bucket_minutes` controls the bucket size (1 = per-minute for short ranges,
+/// 60 = per-hour, 1440 = per-day for long ranges). When <= 0 it is chosen
+/// automatically from the window so the graph stays readable at any scale.
 #[tauri::command]
-fn snapshot(window_minutes: i64) -> Snapshot {
+fn snapshot(window_minutes: i64, bucket_minutes: Option<i64>) -> Snapshot {
     let lines = read_lines();
     let now = now_ms();
     let cutoff = now - window_minutes * MIN_MS;
+
+    // Auto-pick a bucket size: aim for <= ~360 buckets across the window.
+    let bucket_min = match bucket_minutes {
+        Some(b) if b > 0 => b,
+        _ => {
+            if window_minutes <= 360 {
+                1
+            } else if window_minutes <= 3 * 1440 {
+                15
+            } else if window_minutes <= 14 * 1440 {
+                60
+            } else {
+                1440
+            }
+        }
+    };
+    let bucket_ms = bucket_min * MIN_MS;
 
     let mut buckets: BTreeMap<i64, MinuteBucket> = BTreeMap::new();
     let mut latest_u5h = 0.0;
@@ -136,7 +163,7 @@ fn snapshot(window_minutes: i64) -> Snapshot {
             }
             continue;
         }
-        let minute = (l.t / MIN_MS) * MIN_MS;
+        let minute = (l.t / bucket_ms) * bucket_ms;
         let b = buckets.entry(minute).or_insert(MinuteBucket {
             minute,
             ..Default::default()
@@ -207,6 +234,8 @@ fn snapshot(window_minutes: i64) -> Snapshot {
         latest_u7d,
         reset5h: latest_reset5h,
         reset7d: latest_reset7d,
+        bucket_minutes: bucket_min,
+        window_minutes,
         log_path: log_path().to_string_lossy().to_string(),
         has_data: !lines.is_empty(),
     }
@@ -290,11 +319,144 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+// ── live rate-limit source (qalcode2 / opencode "/ratelimit" endpoint) ───────
+// qalcode2 serves the live Anthropic unified rate-limit snapshot (5h/7d
+// utilization + reset timestamps) at GET <server>/ratelimit. We auto-discover
+// the local server port and read it with a dependency-free raw HTTP/1.0 GET.
+
+#[derive(Debug, Default, Serialize, Clone)]
+pub struct LiveRatelimit {
+    available: bool,
+    u5h: Option<f64>,
+    u7d: Option<f64>,
+    /// epoch SECONDS
+    reset5h: Option<f64>,
+    reset7d: Option<f64>,
+    status: Option<String>,
+    plan: Option<String>,
+    source: Option<String>,
+}
+
+/// Minimal HTTP/1.0 GET over TCP — no external deps. Returns the body string.
+fn http_get(host: &str, port: u16, path: &str, timeout_ms: u64) -> Option<String> {
+    let addr = format!("{host}:{port}");
+    let mut stream = TcpStream::connect(&addr).ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(timeout_ms)))
+        .ok()?;
+    stream
+        .set_write_timeout(Some(Duration::from_millis(timeout_ms)))
+        .ok()?;
+    let req = format!(
+        "GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\nAccept: application/json\r\n\r\n"
+    );
+    stream.write_all(req.as_bytes()).ok()?;
+    let mut buf = String::new();
+    stream.read_to_string(&mut buf).ok()?;
+    // split headers/body on the blank line
+    let body = buf.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    if body.is_empty() {
+        None
+    } else {
+        Some(body)
+    }
+}
+
+/// Discover local bun/node ports via `ss -tlnp` (best effort).
+fn local_listen_ports() -> Vec<u16> {
+    use std::process::Command;
+    let mut ports = Vec::new();
+    if let Ok(out) = Command::new("ss").args(["-tlnp"]).output() {
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            if !line.contains("127.0.0.1") {
+                continue;
+            }
+            if !(line.contains("bun") || line.contains("node")) {
+                continue;
+            }
+            if let Some(idx) = line.find("127.0.0.1:") {
+                let rest = &line[idx + "127.0.0.1:".len()..];
+                let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if let Ok(p) = num.parse::<u16>() {
+                    if !ports.contains(&p) {
+                        ports.push(p);
+                    }
+                }
+            }
+        }
+    }
+    ports
+}
+
+fn parse_ratelimit(body: &str, source: &str) -> Option<LiveRatelimit> {
+    let j: serde_json::Value = serde_json::from_str(body).ok()?;
+    let u5h = j.get("unified5hUtilization").and_then(|v| v.as_f64());
+    let u7d = j.get("unified7dUtilization").and_then(|v| v.as_f64());
+    if u5h.is_none() && u7d.is_none() {
+        return None;
+    }
+    Some(LiveRatelimit {
+        available: true,
+        u5h,
+        u7d,
+        reset5h: j.get("unified5hReset").and_then(|v| v.as_f64()),
+        reset7d: j.get("unified7dReset").and_then(|v| v.as_f64()),
+        status: j
+            .get("unifiedStatus")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        plan: j
+            .get("planLabel")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        source: Some(source.to_string()),
+    })
+}
+
+/// Poll qalcode2's /ratelimit for the live 5h/7d windows + reset times.
+/// Honors CLAUDE_PULSE_RATELIMIT_URL (host:port or full URL) if set.
+#[tauri::command]
+fn ratelimit() -> LiveRatelimit {
+    // explicit override
+    if let Ok(url) = std::env::var("CLAUDE_PULSE_RATELIMIT_URL") {
+        if let Some((host, port, path)) = split_url(&url) {
+            if let Some(body) = http_get(&host, port, &path, 1500) {
+                if let Some(rl) = parse_ratelimit(&body, &url) {
+                    return rl;
+                }
+            }
+        }
+    }
+    for port in local_listen_ports() {
+        if let Some(body) = http_get("127.0.0.1", port, "/ratelimit", 1200) {
+            let src = format!("http://127.0.0.1:{port}/ratelimit");
+            if let Some(rl) = parse_ratelimit(&body, &src) {
+                return rl;
+            }
+        }
+    }
+    LiveRatelimit::default()
+}
+
+fn split_url(url: &str) -> Option<(String, u16, String)> {
+    let s = url.strip_prefix("http://").unwrap_or(url);
+    let (hostport, path) = match s.find('/') {
+        Some(i) => (&s[..i], &s[i..]),
+        None => (s, "/ratelimit"),
+    };
+    let (host, port) = match hostport.rsplit_once(':') {
+        Some((h, p)) => (h.to_string(), p.parse().ok()?),
+        None => (hostport.to_string(), 80u16),
+    };
+    Some((host, port, path.to_string()))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![snapshot, day_summaries])
+        .invoke_handler(tauri::generate_handler![snapshot, day_summaries, ratelimit])
         .run(tauri::generate_context!())
         .expect("error while running claude-pulse");
 }

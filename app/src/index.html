@@ -20,6 +20,10 @@
           <option value="360">last 6 h</option>
           <option value="720">last 12 h</option>
           <option value="1440">last 24 h</option>
+          <option value="4320">last 3 days</option>
+          <option value="10080">last 7 days</option>
+          <option value="43200">last 30 days</option>
+          <option value="129600">last 90 days</option>
         </select>
       </label>
       <button id="widgetBtn" title="Toggle compact always-on-top widget">
@@ -63,7 +67,7 @@
 
       <!-- ROLLING-WINDOW LIMITS: 5h (session) + 7d (weekly) utilization -->
       <section class="card windows">
-        <h2>Usage limits</h2>
+        <h2>Usage limits <span class="sub" id="plan-label"></span></h2>
         <div class="winrow">
           <div class="winhead">
             <span class="wlabel">Current session <span class="wmeta">· 5-hour window</span></span>

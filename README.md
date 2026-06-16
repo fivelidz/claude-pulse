@@ -5,8 +5,8 @@
 Claude Pulse shows you, on a **single dashboard**, in real time and over history:
 
 - **A live "accelerometer" gauge** — your tokens-per-minute as a sweeping needle with green → amber → red zones and a peak marker.
-- **Rolling rate-limit windows** — your **5-hour** and **7-day** window utilization as live bars (the limits that actually govern OAuth/subscription usage).
-- **A token-usage-over-time graph** — input/output tokens and requests per minute, with **peak markers** and **rate-limit (429) markers** so you can _see exactly when you got throttled and at what throughput_.
+- **Rolling rate-limit windows** — your **5-hour "current session"** and **7-day "weekly (all models)"** window utilization as live bars with **"resets in Xh Ym" countdowns** (the limits that actually govern OAuth/subscription usage). When a qalcode2/opencode server is running, Pulse reads its live `/ratelimit` snapshot so the numbers + reset times are the **real** values from your account.
+- **A token-usage-over-time graph** — input/output tokens and requests per bucket, with **peak markers** and **rate-limit (429) markers** so you can _see exactly when you got throttled and at what throughput_. Pick the scale: **60 min → 24 h → 3/7/30/90 days**; buckets auto-switch from per-minute to per-hour to per-day so longer ranges stay readable.
 - **A calendar** — daily usage totals, peaks, and rate-limit counts across the last ~5 weeks.
 - **A compact always-on-top widget mode** — park the gauge on a second monitor.
 
