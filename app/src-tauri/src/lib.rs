@@ -355,6 +355,8 @@ pub struct LiveRatelimit {
     status: Option<String>,
     plan: Option<String>,
     source: Option<String>,
+    /// epoch MS when this snapshot was taken by the server (freshness)
+    at: Option<f64>,
 }
 
 /// Minimal HTTP/1.0 GET over TCP — no external deps. Returns the body string.
@@ -434,6 +436,7 @@ fn parse_ratelimit(body: &str, source: &str) -> Option<LiveRatelimit> {
             .and_then(|v| v.as_str())
             .map(String::from),
         source: Some(source.to_string()),
+        at: j.get("at").and_then(|v| v.as_f64()),
     })
 }
 
@@ -468,25 +471,25 @@ fn ratelimit() -> LiveRatelimit {
             }
         }
     } else {
-        // 2) try the last-known-good port first (fast path), then scan
-        let mut ports: Vec<u16> = Vec::new();
-        if let Ok(guard) = cache.lock() {
-            if let Some(p) = guard.2 {
-                ports.push(p);
-            }
-        }
-        for p in local_listen_ports() {
-            if !ports.contains(&p) {
-                ports.push(p);
-            }
-        }
-        for port in ports {
+        // 2) Scan ALL local servers and pick the FRESHEST snapshot (newest `at`).
+        //    Multiple qalcode2 servers from old sessions may be running, each
+        //    reporting different (stale) data — we must not show those. Reject
+        //    anything older than 5 minutes.
+        const MAX_AGE_MS: f64 = 5.0 * 60_000.0;
+        let mut best_at: f64 = -1.0;
+        for port in local_listen_ports() {
             if let Some(body) = http_get("127.0.0.1", port, "/ratelimit", 800) {
                 let src = format!("http://127.0.0.1:{port}/ratelimit");
                 if let Some(rl) = parse_ratelimit(&body, &src) {
-                    result = rl;
-                    good_port = Some(port);
-                    break;
+                    let at = rl.at.unwrap_or(0.0);
+                    if (now as f64) - at > MAX_AGE_MS {
+                        continue; // stale — skip
+                    }
+                    if at > best_at {
+                        best_at = at;
+                        result = rl;
+                        good_port = Some(port);
+                    }
                 }
             }
         }

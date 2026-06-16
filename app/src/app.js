@@ -656,12 +656,39 @@ const rangeLabel = {
   43200: "last 30 days",
   129600: "last 90 days",
 };
+// ordered list of zoom levels (minutes) — matches the dropdown
+const ZOOM_LEVELS = [60, 180, 360, 720, 1440, 4320, 10080, 43200, 129600];
 async function applyRange(minutes) {
   rangeMinutes = minutes;
   rangeSelect.value = String(minutes);
   await tick();
 }
 rangeSelect.addEventListener("change", () => applyRange(Number(rangeSelect.value)));
+
+// Scroll-to-zoom on the graph: wheel up = zoom in (shorter), down = zoom out.
+timeline.addEventListener(
+  "wheel",
+  (e) => {
+    e.preventDefault();
+    let i = ZOOM_LEVELS.indexOf(rangeMinutes);
+    if (i < 0) {
+      // snap to nearest defined level first
+      i = ZOOM_LEVELS.reduce(
+        (best, v, idx) =>
+          Math.abs(v - rangeMinutes) < Math.abs(ZOOM_LEVELS[best] - rangeMinutes)
+            ? idx
+            : best,
+        0,
+      );
+    }
+    // wheel up (deltaY < 0) → zoom IN → smaller index
+    const dir = e.deltaY < 0 ? -1 : 1;
+    const next = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, i + dir));
+    if (ZOOM_LEVELS[next] !== rangeMinutes) applyRange(ZOOM_LEVELS[next]);
+  },
+  { passive: false },
+);
+timeline.style.cursor = "ns-resize";
 
 // Deep-link the range via URL hash (e.g. #range=10080) — shareable + lets the
 // headless renderer/preview open a specific scale.

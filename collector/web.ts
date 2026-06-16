@@ -35,9 +35,8 @@ const MIN_MS = 60_000;
 // poll it so claude-pulse shows the REAL current limits + reset countdowns
 // even before the proxy has logged anything.
 const RATELIMIT_URL = process.env["CLAUDE_PULSE_RATELIMIT_URL"]; // explicit override
-let cachedRatelimit: any = null;
+let cachedRatelimit: any = undefined;
 let cachedRatelimitAt = 0;
-let discoveredUrl: string | null = RATELIMIT_URL ?? null;
 
 function listLocalBunPorts(): number[] {
   // Best-effort: parse `ss -tlnp` for bun servers bound to 127.0.0.1.
@@ -77,53 +76,54 @@ async function fetchRatelimitFrom(url: string): Promise<any | null> {
   }
 }
 
-async function discoverRatelimitUrl(): Promise<string | null> {
-  // If the user pinned a URL explicitly, only ever use that one (no scanning).
-  if (RATELIMIT_URL) {
-    return (await fetchRatelimitFrom(RATELIMIT_URL)) ? RATELIMIT_URL : null;
-  }
-  if (discoveredUrl) {
-    // verify it still answers; if not, re-discover
-    if (await fetchRatelimitFrom(discoveredUrl)) return discoveredUrl;
-    discoveredUrl = null;
-  }
-  for (const port of listLocalBunPorts()) {
-    const url = `http://127.0.0.1:${port}/ratelimit`;
-    if (await fetchRatelimitFrom(url)) {
-      discoveredUrl = url;
-      console.log(`[claude-pulse] found live rate-limit source at ${url}`);
-      return url;
-    }
-  }
-  return null;
-}
+// Max age (ms) of a /ratelimit snapshot we'll trust. Multiple stale qalcode2
+// servers from old sessions can be running; we must NOT show their data.
+const MAX_RL_AGE_MS = 5 * 60_000; // 5 minutes
 
-// Returns a normalized { u5h, u7d, reset5h, reset7d, plan, status } or null.
+// Returns the FRESHEST live rate-limit snapshot across all local servers.
+// Critical: when several qalcode2 servers run (old + current sessions), each
+// reports different data. We pick the one whose `at` timestamp is newest, and
+// reject anything older than MAX_RL_AGE_MS so stale accounts never leak in.
 async function getLiveRatelimit(): Promise<any | null> {
   const now = Date.now();
-  if (cachedRatelimit && now - cachedRatelimitAt < 4000) return cachedRatelimit;
-  const url = await discoverRatelimitUrl();
-  if (!url) {
+  if (cachedRatelimit !== undefined && now - cachedRatelimitAt < 3000)
+    return cachedRatelimit;
+
+  const urls = RATELIMIT_URL
+    ? [RATELIMIT_URL]
+    : listLocalBunPorts().map((p) => `http://127.0.0.1:${p}/ratelimit`);
+
+  const results = await Promise.all(
+    urls.map(async (url) => {
+      const j = await fetchRatelimitFrom(url);
+      return j ? { url, j } : null;
+    }),
+  );
+
+  let best: { url: string; j: any } | null = null;
+  for (const r of results) {
+    if (!r) continue;
+    const at = Number(r.j.at ?? 0);
+    if (now - at > MAX_RL_AGE_MS) continue; // too stale — skip
+    if (!best || at > Number(best.j.at ?? 0)) best = r;
+  }
+
+  cachedRatelimitAt = now;
+  if (!best) {
     cachedRatelimit = null;
-    cachedRatelimitAt = now;
     return null;
   }
-  const j = await fetchRatelimitFrom(url);
-  if (!j) {
-    cachedRatelimit = null;
-    cachedRatelimitAt = now;
-    return null;
-  }
+  const j = best.j;
   cachedRatelimit = {
     u5h: j.unified5hUtilization ?? null,
     u7d: j.unified7dUtilization ?? null,
-    reset5h: j.unified5hReset ?? 0, // epoch seconds
-    reset7d: j.unified7dReset ?? 0, // epoch seconds
+    reset5h: j.unified5hReset ?? 0,
+    reset7d: j.unified7dReset ?? 0,
     status: j.unifiedStatus ?? null,
     plan: j.planLabel ?? null,
-    source: url,
+    source: best.url,
+    at: j.at,
   };
-  cachedRatelimitAt = now;
   return cachedRatelimit;
 }
 

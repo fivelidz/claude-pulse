@@ -60,18 +60,31 @@ async function isOpencode(base: string): Promise<boolean> {
   return Array.isArray(j);
 }
 
+// Freshness of a server's /ratelimit snapshot (epoch ms), or 0 if none.
+async function serverFreshness(base: string): Promise<number> {
+  const j = await jget(base + "/ratelimit");
+  return j && typeof j.at === "number" ? j.at : 0;
+}
+
+// Pick the FRESHEST opencode server. Multiple servers (old + current sessions)
+// may run; we must use the one matching the user's CURRENT session, identified
+// by the newest /ratelimit snapshot — otherwise we'd show another account's data.
 async function discover(): Promise<string | null> {
   if (EXPLICIT) return (await isOpencode(EXPLICIT)) ? EXPLICIT : null;
-  if (baseUrl && (await isOpencode(baseUrl))) return baseUrl;
-  baseUrl = null;
-  for (const p of localPorts()) {
-    const url = `http://127.0.0.1:${p}`;
-    if (await isOpencode(url)) {
-      baseUrl = url;
-      return url;
-    }
+  const candidates = localPorts().map((p) => `http://127.0.0.1:${p}`);
+  const checked = await Promise.all(
+    candidates.map(async (url) => {
+      if (!(await isOpencode(url))) return null;
+      return { url, at: await serverFreshness(url) };
+    }),
+  );
+  let best: { url: string; at: number } | null = null;
+  for (const c of checked) {
+    if (!c) continue;
+    if (!best || c.at > best.at) best = c;
   }
-  return null;
+  baseUrl = best ? best.url : null;
+  return baseUrl;
 }
 
 function tokensOf(m: any): {
