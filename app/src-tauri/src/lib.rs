@@ -550,6 +550,8 @@ use std::sync::Mutex;
 // msgIds we've already written, so we never double-count across imports.
 static SEEN_MSGS: std::sync::OnceLock<Mutex<HashSet<String>>> = std::sync::OnceLock::new();
 static LAST_IMPORT_MS: std::sync::OnceLock<Mutex<i64>> = std::sync::OnceLock::new();
+// (last rate-limit signature, last write ms) — to throttle ratelimit samples.
+static RL_SAMPLE_STATE: std::sync::OnceLock<Mutex<(String, i64)>> = std::sync::OnceLock::new();
 
 /// HTTP GET that reads a (possibly large) body to EOF with a generous timeout.
 fn http_get_big(host: &str, port: u16, path: &str, timeout_ms: u64) -> Option<Vec<u8>> {
@@ -615,6 +617,59 @@ fn import_opencode_tokens() -> usize {
     let Some(port) = freshest_opencode_port() else {
         return 0;
     };
+
+    // Also persist a rate-limit SAMPLE (5h/7d utilization + resets + plan) to the
+    // log so the windows stay populated AND we build usage-limit history over
+    // time. Throttled: only write when the value changed or >=55s since last.
+    if let Some(rlbody) = http_get("127.0.0.1", port, "/ratelimit", 800) {
+        if let Ok(j) = serde_json::from_str::<serde_json::Value>(&rlbody) {
+            let u5h = j.get("unified5hUtilization").and_then(|v| v.as_f64());
+            let u7d = j.get("unified7dUtilization").and_then(|v| v.as_f64());
+            if u5h.is_some() || u7d.is_some() {
+                let sig = format!(
+                    "{:?}|{:?}|{:?}|{:?}",
+                    u5h,
+                    u7d,
+                    j.get("unified5hReset").and_then(|v| v.as_f64()),
+                    j.get("unified7dReset").and_then(|v| v.as_f64())
+                );
+                let st = RL_SAMPLE_STATE.get_or_init(|| Mutex::new((String::new(), 0)));
+                let mut should = false;
+                {
+                    let mut g = st.lock().unwrap();
+                    if g.0 != sig || now - g.1 >= 55_000 {
+                        g.0 = sig;
+                        g.1 = now;
+                        should = true;
+                    }
+                }
+                if should {
+                    let line = serde_json::json!({
+                        "t": now,
+                        "kind": "ratelimit",
+                        "u5h": u5h,
+                        "u7d": u7d,
+                        "reset5h": j.get("unified5hReset").and_then(|v| v.as_f64()),
+                        "reset7d": j.get("unified7dReset").and_then(|v| v.as_f64()),
+                        "rlStatus": j.get("unifiedStatus").and_then(|v| v.as_str()),
+                        "plan": j.get("planLabel").and_then(|v| v.as_str()),
+                        "source": "opencode-live-rust",
+                    });
+                    if let Some(parent) = log_path().parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    if let Ok(mut f) = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(log_path())
+                    {
+                        use std::io::Write as _;
+                        let _ = f.write_all((line.to_string() + "\n").as_bytes());
+                    }
+                }
+            }
+        }
+    }
 
     // list sessions
     let Some(sbody) = http_get_big("127.0.0.1", port, "/session", 2500) else {
@@ -731,6 +786,7 @@ fn import_opencode_tokens() -> usize {
                 "output": output,
                 "cacheRead": cache_read,
                 "cacheWrite": cache_write,
+                "model": model,
                 "rateLimited": false,
                 "durationMs": 0,
                 "source": "opencode-live-rust",

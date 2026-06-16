@@ -440,10 +440,84 @@ function setWindow(prefix, frac, resetEpochSec) {
     const pct = Math.max(0, Math.min(100, Math.round(frac * 100)));
     pctEl.textContent = pct + "% used";
     fillEl.style.width = pct + "%";
+    // Solid colour by how full the bar actually is — only red when near the
+    // limit, not a fixed green→red gradient on every bar.
+    const col =
+      pct >= 85
+        ? "var(--rl)"
+        : pct >= 60
+          ? "var(--peak)"
+          : "var(--req)";
+    fillEl.style.background = col;
     pctEl.style.color =
       pct >= 85 ? "var(--rl)" : pct >= 60 ? "var(--peak)" : "var(--text)";
   }
   if (noteEl) noteEl.textContent = "resets in " + fmtReset(resetEpochSec);
+}
+
+// ── usage-limit history mini-chart (5h + 7d utilization over time) ────────────
+const limhist = document.getElementById("limhist");
+const lhctx = limhist ? limhist.getContext("2d") : null;
+function drawLimHist(s) {
+  if (!lhctx) return;
+  // fit to CSS width × dpr
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = limhist.parentElement.clientWidth;
+  const cssH = 70;
+  if (limhist.width !== Math.round(cssW * dpr)) {
+    limhist.width = Math.round(cssW * dpr);
+    limhist.height = Math.round(cssH * dpr);
+  }
+  lhctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const w = cssW,
+    h = cssH;
+  lhctx.clearRect(0, 0, w, h);
+  const pad = { l: 4, r: 4, t: 6, b: 12 };
+  const plotW = w - pad.l - pad.r,
+    plotH = h - pad.t - pad.b;
+
+  // use buckets that carry a utilization sample
+  const pts = (s.minutes || []).filter((m) => (m.u5h || 0) > 0 || (m.u7d || 0) > 0);
+  if (pts.length < 2) {
+    lhctx.fillStyle = "#5a6172";
+    lhctx.font = "10px ui-monospace, monospace";
+    lhctx.textAlign = "center";
+    lhctx.fillText("building history…", w / 2, h / 2);
+    return;
+  }
+  const t0 = pts[0].minute,
+    t1 = pts[pts.length - 1].minute || t0 + 1;
+  const x = (t) => pad.l + ((t - t0) / Math.max(1, t1 - t0)) * plotW;
+  const y = (frac) => pad.t + plotH - Math.max(0, Math.min(1, frac)) * plotH;
+
+  // gridline at 100%/50%
+  lhctx.strokeStyle = "#232733";
+  lhctx.lineWidth = 1;
+  for (const g of [0, 0.5, 1]) {
+    lhctx.beginPath();
+    lhctx.moveTo(pad.l, y(g));
+    lhctx.lineTo(w - pad.r, y(g));
+    lhctx.stroke();
+  }
+
+  const line = (key, color) => {
+    lhctx.strokeStyle = color;
+    lhctx.lineWidth = 1.8;
+    lhctx.lineJoin = "round";
+    lhctx.beginPath();
+    let started = false;
+    for (const m of pts) {
+      const v = m[key] || 0;
+      if (v <= 0) continue;
+      const px = x(m.minute),
+        py = y(v);
+      started ? lhctx.lineTo(px, py) : lhctx.moveTo(px, py);
+      started = true;
+    }
+    lhctx.stroke();
+  };
+  line("u7d", "#5b9bd5"); // 7d
+  line("u5h", "#d97757"); // 5h on top
 }
 
 // Format a "resets in Xh Ym" string from an epoch-seconds reset timestamp.
@@ -566,21 +640,32 @@ async function tick() {
   try {
     const s = await getSnapshot(rangeMinutes);
     if (s) {
-      // PRIMARY source = the user's OWN proxied traffic. The collector logs the
-      // anthropic-ratelimit-unified-* headers (5h/7d utilization + reset times)
-      // from every response, so the limits come straight from the user's account
-      // — no qalcode2 required. We only fall back to an external live source
-      // (qalcode2/opencode /ratelimit, if present) when the log has none yet,
-      // and even then only to fill gaps + add the plan label.
-      const haveLogLimits = s.latest_u5h > 0 || s.latest_u7d > 0;
-      if (liveRl && !haveLogLimits) {
-        if (liveRl.u5h != null) s.latest_u5h = liveRl.u5h;
-        if (liveRl.u7d != null) s.latest_u7d = liveRl.u7d;
+      // The snapshot's latest_u5h/u7d come from the log (the backend importer
+      // stores ratelimit samples there). If the live /ratelimit poll has FRESHER
+      // values, prefer those so the windows track in real time. Either way, never
+      // let a present value get overwritten by a zero.
+      if (liveRl) {
+        if (liveRl.u5h != null && liveRl.u5h > 0) s.latest_u5h = liveRl.u5h;
+        if (liveRl.u7d != null && liveRl.u7d > 0) s.latest_u7d = liveRl.u7d;
         if (liveRl.reset5h) s.reset5h = liveRl.reset5h;
         if (liveRl.reset7d) s.reset7d = liveRl.reset7d;
+        if (liveRl.plan && !s.plan) s.plan = liveRl.plan;
       }
-      // plan label is a qalcode2-only nicety; show it if we have it
-      if (liveRl && liveRl.plan && !s.plan) s.plan = liveRl.plan;
+      // carry forward the last good limits so they never blink to empty
+      if (s.latest_u5h > 0) lastGoodU5h = s.latest_u5h;
+      if (s.latest_u7d > 0) lastGoodU7d = s.latest_u7d;
+      if (s.reset5h) lastGoodReset5h = s.reset5h;
+      if (s.reset7d) lastGoodReset7d = s.reset7d;
+      if (s.plan) lastGoodPlan = s.plan;
+      if (!(s.latest_u5h > 0) && lastGoodU5h > 0) {
+        s.latest_u5h = lastGoodU5h;
+        s.reset5h = lastGoodReset5h;
+      }
+      if (!(s.latest_u7d > 0) && lastGoodU7d > 0) {
+        s.latest_u7d = lastGoodU7d;
+        s.reset7d = lastGoodReset7d;
+      }
+      if (!s.plan && lastGoodPlan) s.plan = lastGoodPlan;
       snap = s;
     }
   } catch (e) {
@@ -589,6 +674,7 @@ async function tick() {
   if (!snap) return;
   setReadout(snap);
   drawTimeline(snap);
+  drawLimHist(snap);
   const last = (snap.minutes || []).at(-1);
   drawGauge(
     last ? last.input + last.output : 0,
@@ -600,6 +686,12 @@ async function tick() {
 // Poll the live rate-limit source on its own cadence so a slow/absent qalcode2
 // can never stall the main snapshot/render loop.
 let liveRl = null;
+// Last known-good limit values, so the windows never blink to empty between polls.
+let lastGoodU5h = 0,
+  lastGoodU7d = 0,
+  lastGoodReset5h = 0,
+  lastGoodReset7d = 0,
+  lastGoodPlan = "";
 async function pollRatelimit() {
   try {
     const live = await getLiveRatelimit();
