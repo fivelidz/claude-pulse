@@ -78,14 +78,52 @@ body {
   align-items: center;
   gap: 6px;
   color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 .rangewrap select {
-  background: var(--bg);
+  background: #1d2230;
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 4px 8px;
-  font: inherit;
+  padding: 5px 28px 5px 10px;
+  font:
+    600 12px ui-monospace,
+    monospace;
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: pointer;
+  /* custom chevron so it reads as a dropdown even where native arrow is faint */
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23d97757' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+.rangewrap select:hover {
+  border-color: var(--accent);
+}
+.rangewrap select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+/* the dropdown option list (rendered by the OS/webview) — force dark */
+.rangewrap select option {
+  background: #1d2230;
+  color: var(--text);
+}
+
+/* graph card header: title left, range selector right */
+.graphhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.graphhead h2 {
+  margin-bottom: 0;
 }
 #widgetBtn {
   background: transparent;

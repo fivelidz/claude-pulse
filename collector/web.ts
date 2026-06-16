@@ -78,6 +78,10 @@ async function fetchRatelimitFrom(url: string): Promise<any | null> {
 }
 
 async function discoverRatelimitUrl(): Promise<string | null> {
+  // If the user pinned a URL explicitly, only ever use that one (no scanning).
+  if (RATELIMIT_URL) {
+    return (await fetchRatelimitFrom(RATELIMIT_URL)) ? RATELIMIT_URL : null;
+  }
   if (discoveredUrl) {
     // verify it still answers; if not, re-discover
     if (await fetchRatelimitFrom(discoveredUrl)) return discoveredUrl;

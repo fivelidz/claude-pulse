@@ -12,20 +12,6 @@
         <span class="dot"></span> Claude&nbsp;<b>Pulse</b>
       </div>
       <div class="spacer"></div>
-      <label class="rangewrap">
-        <span>range</span>
-        <select id="rangeSelect" title="Time window for the usage graph">
-          <option value="60" selected>last 60 min</option>
-          <option value="180">last 3 h</option>
-          <option value="360">last 6 h</option>
-          <option value="720">last 12 h</option>
-          <option value="1440">last 24 h</option>
-          <option value="4320">last 3 days</option>
-          <option value="10080">last 7 days</option>
-          <option value="43200">last 30 days</option>
-          <option value="129600">last 90 days</option>
-        </select>
-      </label>
       <button id="widgetBtn" title="Toggle compact always-on-top widget">
         ⊟ Widget
       </button>
@@ -88,7 +74,23 @@
 
       <!-- USAGE OVER TIME: per-minute graph with rate-limit markers -->
       <section class="card graphcard">
-        <h2>Token usage over time <span class="sub" id="graph-range">(last 60 min)</span></h2>
+        <div class="graphhead">
+          <h2>Token usage over time</h2>
+          <label class="rangewrap">
+            <span>range</span>
+            <select id="rangeSelect" title="Time window for the usage graph">
+              <option value="60" selected>last 60 min</option>
+              <option value="180">last 3 h</option>
+              <option value="360">last 6 h</option>
+              <option value="720">last 12 h</option>
+              <option value="1440">last 24 h</option>
+              <option value="4320">last 3 days</option>
+              <option value="10080">last 7 days</option>
+              <option value="43200">last 30 days</option>
+              <option value="129600">last 90 days</option>
+            </select>
+          </label>
+        </div>
         <canvas id="timeline" width="940" height="300"></canvas>
         <div class="legend">
           <span><i class="sw trend"></i> total tokens/min</span>

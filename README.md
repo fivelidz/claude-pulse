@@ -74,6 +74,27 @@ The whole dashboard is on **one page**: the live gauge and key stats up top, the
 
 > Prefer the browser? Run the collector with `--web` (above) and open `http://localhost:8788` — same dashboard, no desktop app. Or develop the UI standalone with `bun run preview` in `app/`; with no backend it falls back to a built-in demo data generator.
 
+### Does this "just work" for anybody?
+
+Yes — locally, with no configuration:
+
+- **The graph + per-minute usage + 429 markers** work for **anyone** the moment they
+  run the collector and route a Claude tool through it. The data is their own
+  `usage.jsonl`; nothing else is needed.
+- **The real 5-hour / 7-day windows + "resets in" countdowns + plan label** appear
+  **automatically if a qalcode2/opencode server is running** on the same machine —
+  Claude Pulse auto-discovers its local `/ratelimit` endpoint (scans local ports).
+  No setup; if it's not running, those bars simply stay empty and everything else
+  still works. (You can pin the source with `CLAUDE_PULSE_RATELIMIT_URL`.)
+- **API-key-only users** don't have OAuth 5h/7d windows at all (those are a
+  Pro/Max subscription concept), so the window bars won't populate for them — by
+  design. Their token/request counts and graph still work.
+
+> ⚠️ The live `/ratelimit` discovery is **local-only** (it reads a server on your
+> own machine). The hosted page at qalarc.com is a **showcase**, not a live tool —
+> it can't (and shouldn't) reach anyone's private local server. To actually track
+> your usage, run the collector locally as above.
+
 ---
 
 ## Finding your per-minute rate limit (the whole point)

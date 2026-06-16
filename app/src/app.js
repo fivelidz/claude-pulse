@@ -531,8 +531,6 @@ const rangeLabel = {
 async function applyRange(minutes) {
   rangeMinutes = minutes;
   rangeSelect.value = String(minutes);
-  document.getElementById("graph-range").textContent =
-    "(" + (rangeLabel[rangeMinutes] || rangeMinutes + " min") + ")";
   await tick();
 }
 rangeSelect.addEventListener("change", () => applyRange(Number(rangeSelect.value)));
