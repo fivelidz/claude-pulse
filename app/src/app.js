@@ -498,27 +498,46 @@ function setReadout(s) {
   document.getElementById("r-total").textContent = fmt(Math.round(totalTok));
   document.getElementById("r-reqtot").textContent = fmt(totalReq);
 
-  // data transfer + efficiency
+  // data transfer + efficiency (window totals)
   const mins = s.minutes || [];
+  const totalInput = mins.reduce((a, m) => a + (m.input || 0), 0);
+  const totalOutput = mins.reduce((a, m) => a + (m.output || 0), 0);
+  const totalCacheRead = mins.reduce((a, m) => a + (m.cache_read || 0), 0);
   const bIn = s.total_bytes_in ?? mins.reduce((a, m) => a + (m.bytes_in || 0), 0);
   const bOut =
     s.total_bytes_out ?? mins.reduce((a, m) => a + (m.bytes_out || 0), 0);
-  const totalInput = mins.reduce((a, m) => a + (m.input || 0), 0);
-  const totalCacheRead = mins.reduce((a, m) => a + (m.cache_read || 0), 0);
   const cost = s.total_cost ?? mins.reduce((a, m) => a + (m.cost || 0), 0);
   const setTxt = (id, v) => {
     const el = document.getElementById(id);
     if (el) el.textContent = v;
   };
-  setTxt("r-bytesin", bIn > 0 ? fmtBytes(bIn) : "–");
-  setTxt("r-bytesout", bOut > 0 ? fmtBytes(bOut) : "–");
-  // cache hit rate = cache_read / (cache_read + fresh input)
-  const cacheBase = totalCacheRead + totalInput;
-  setTxt(
-    "r-cachehit",
-    cacheBase > 0 ? Math.round((totalCacheRead / cacheBase) * 100) + "%" : "–",
-  );
-  setTxt("r-cost", cost > 0 ? "$" + cost.toFixed(2) : "–");
+  setTxt("r-input", totalInput > 0 ? fmt(totalInput) : "–");
+  setTxt("r-output", totalOutput > 0 ? fmt(totalOutput) : "–");
+  setTxt("r-cacheread", totalCacheRead > 0 ? fmt(totalCacheRead) : "–");
+
+  // 4th tile adapts to the available data:
+  //  - proxy source (has wire bytes) → show ↑/↓ bytes transferred
+  //  - cost known (>0) → show est. cost
+  //  - otherwise → cache hit rate (always meaningful)
+  if (bIn > 0 || bOut > 0) {
+    setTxt("x4-label", "Data transfer");
+    setTxt("r-x4", `${fmtBytes(bIn)} ↑ / ${fmtBytes(bOut)} ↓`);
+    setTxt("x4-sub", "request / response bytes");
+  } else if (cost > 0) {
+    setTxt("x4-label", "Est. cost");
+    setTxt("r-x4", "$" + cost.toFixed(2));
+    setTxt("x4-sub", "this window");
+  } else {
+    const cacheBase = totalCacheRead + totalInput;
+    setTxt("x4-label", "Cache hit rate");
+    setTxt(
+      "r-x4",
+      cacheBase > 0
+        ? Math.round((totalCacheRead / cacheBase) * 100) + "%"
+        : "–",
+    );
+    setTxt("x4-sub", "cache-read ÷ total input");
+  }
 
   setWindow("w5h", s.latest_u5h || 0, s.reset5h || 0);
   setWindow("w7d", s.latest_u7d || 0, s.reset7d || 0);
@@ -627,12 +646,12 @@ function fitCanvas(canvas, cssHeight, maxWidth) {
 }
 
 function layout() {
-  // gauge: keep roughly 1.4:1 and capped so it doesn't balloon on wide windows
-  const gaugeCardW = gauge.parentElement.clientWidth - 16;
-  const gaugeH = Math.min(300, Math.max(200, gaugeCardW * 0.66));
-  fitCanvas(gauge, gaugeH, Math.round(gaugeH * 1.45));
-  // timeline: fill width, height scales with window
-  const tlH = Math.min(440, Math.max(240, window.innerHeight * 0.36));
+  // gauge: compact, capped so it doesn't dominate the viewport
+  const gaugeCardW = gauge.parentElement.clientWidth - 12;
+  const gaugeH = Math.min(220, Math.max(170, gaugeCardW * 0.58));
+  fitCanvas(gauge, gaugeH, Math.round(gaugeH * 1.5));
+  // timeline: fill width, height scales with window (compact)
+  const tlH = Math.min(360, Math.max(200, window.innerHeight * 0.3));
   fitCanvas(timeline, tlH);
   if (snap) {
     const last = (snap.minutes || []).at(-1);
@@ -725,30 +744,8 @@ async function applyRange(minutes) {
 }
 rangeSelect.addEventListener("change", () => applyRange(Number(rangeSelect.value)));
 
-// Scroll-to-zoom on the graph: wheel up = zoom in (shorter), down = zoom out.
-timeline.addEventListener(
-  "wheel",
-  (e) => {
-    e.preventDefault();
-    let i = ZOOM_LEVELS.indexOf(rangeMinutes);
-    if (i < 0) {
-      // snap to nearest defined level first
-      i = ZOOM_LEVELS.reduce(
-        (best, v, idx) =>
-          Math.abs(v - rangeMinutes) < Math.abs(ZOOM_LEVELS[best] - rangeMinutes)
-            ? idx
-            : best,
-        0,
-      );
-    }
-    // wheel up (deltaY < 0) → zoom IN → smaller index
-    const dir = e.deltaY < 0 ? -1 : 1;
-    const next = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, i + dir));
-    if (ZOOM_LEVELS[next] !== rangeMinutes) applyRange(ZOOM_LEVELS[next]);
-  },
-  { passive: false },
-);
-timeline.style.cursor = "ns-resize";
+// Graph time-range is chosen via the dropdown (no scroll-wheel hijacking —
+// the wheel scrolls the page; Ctrl+wheel zooms the UI).
 
 // Deep-link the range via URL hash (e.g. #range=10080) — shareable + lets the
 // headless renderer/preview open a specific scale.

@@ -60,27 +60,27 @@
         </div>
       </section>
 
-      <!-- DATA TRANSFER + EFFICIENCY -->
+      <!-- DATA TRANSFER + EFFICIENCY (window totals) -->
       <section class="card xfergrid">
         <div class="metric">
-          <span class="label">↑ Sent to Anthropic</span>
-          <span id="r-bytesin" class="val">–</span>
-          <span class="sublabel">request bytes (window)</span>
+          <span class="label">↑ Input</span>
+          <span id="r-input" class="val">–</span>
+          <span class="sublabel">input tokens (window)</span>
         </div>
         <div class="metric">
-          <span class="label">↓ Received</span>
-          <span id="r-bytesout" class="val">–</span>
-          <span class="sublabel">response bytes (window)</span>
+          <span class="label">↓ Output</span>
+          <span id="r-output" class="val">–</span>
+          <span class="sublabel">output tokens (window)</span>
         </div>
         <div class="metric">
-          <span class="label">Cache hit rate</span>
-          <span id="r-cachehit" class="val">–</span>
-          <span class="sublabel">cache-read ÷ input</span>
+          <span class="label">Cache read</span>
+          <span id="r-cacheread" class="val">–</span>
+          <span class="sublabel">tokens served from cache</span>
         </div>
         <div class="metric">
-          <span class="label">Est. cost</span>
-          <span id="r-cost" class="val">–</span>
-          <span class="sublabel">this window (if known)</span>
+          <span class="label" id="x4-label">Cache hit rate</span>
+          <span id="r-x4" class="val">–</span>
+          <span class="sublabel" id="x4-sub">cache-read ÷ total input</span>
         </div>
       </section>
 
@@ -108,7 +108,7 @@
       <!-- USAGE OVER TIME: per-minute graph with rate-limit markers -->
       <section class="card graphcard">
         <div class="graphhead">
-          <h2>Token usage over time <span class="sub">· scroll to zoom</span></h2>
+          <h2>Token usage over time</h2>
           <label class="rangewrap">
             <span>range</span>
             <select id="rangeSelect" title="Time window for the usage graph">
@@ -203,6 +203,11 @@
             in" countdowns and your plan label (e.g. Max&nbsp;20×).</li>
           <li><b>Rate-limit (429) marks</b> show where you got throttled, on the
             graph and as history ticks on the gauge.</li>
+          <li><b>Input / Output / Cache-read</b> tiles show the window's token
+            volume; <b>cache hit rate</b> = cache-read ÷ total input. When traffic
+            goes through the proxy, the same tile shows actual <b>bytes sent /
+            received</b> over the wire (the live opencode source has token counts
+            but not wire bytes, so it shows cache hit rate instead).</li>
         </ul>
         <p class="note">
           With only a plain API key (no Pro/Max OAuth) the unified 5h/7d windows

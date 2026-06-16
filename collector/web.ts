@@ -397,7 +397,7 @@ export function startWeb(port: number): void {
 
       if (p === "/api/health") return json({ ok: true, log: LOG_FILE });
 
-      if (p === "/api/version") return json({ version: "0.2.0" });
+      if (p === "/api/version") return json({ version: "0.4.0" });
 
       if (p === "/api/ratelimit") {
         const rl = await getLiveRatelimit();
