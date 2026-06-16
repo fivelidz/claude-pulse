@@ -854,9 +854,18 @@ pub fn run() {
             // qalcode2 token usage into the log every few seconds. This makes the
             // app self-sufficient — opening it populates the graph, no separate
             // collector process required.
-            std::thread::spawn(|| loop {
-                let _ = import_opencode_tokens();
-                std::thread::sleep(Duration::from_secs(5));
+            eprintln!(
+                "[claude-pulse] v{} started — importing live usage every 5s",
+                env!("CARGO_PKG_VERSION")
+            );
+            std::thread::spawn(|| {
+                // import immediately on startup so data shows fast, then loop
+                let n = import_opencode_tokens();
+                eprintln!("[claude-pulse] initial import: {n} lines");
+                loop {
+                    std::thread::sleep(Duration::from_secs(5));
+                    let _ = import_opencode_tokens();
+                }
             });
             Ok(())
         })

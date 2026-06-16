@@ -1,6 +1,6 @@
 [package]
 name = "claude-pulse"
-version = "0.5.0"
+version = "0.5.1"
 description = "Claude API usage monitor with an accelerometer-style live gauge"
 authors = ["fivelidz"]
 edition = "2021"
