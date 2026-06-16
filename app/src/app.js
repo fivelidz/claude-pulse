@@ -88,27 +88,42 @@ let rangeMinutes = 60; // graph window
 const gauge = document.getElementById("gauge");
 const gctx = gauge.getContext("2d");
 
+// Round a value up to a "nice" axis maximum (1/2/5 × 10^n).
+function niceMax(v) {
+  if (v <= 0) return 10000;
+  const exp = Math.floor(Math.log10(v));
+  const base = Math.pow(10, exp);
+  const f = v / base;
+  const nice = f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10;
+  return nice * base;
+}
+
 function drawGauge(tpm, peakTpm, rateLimited) {
   const w = gauge._cssW || gauge.width,
     h = gauge._cssH || gauge.height;
   const cx = w / 2,
-    cy = h * 0.82,
-    r = Math.min(w, h) * 0.62;
+    cy = h * 0.84,
+    r = Math.min(w, h) * 0.58;
   gctx.clearRect(0, 0, w, h);
 
-  const target = Math.max(peakTpm * 1.15, tpm * 1.15, 5000);
-  gaugeMax += (target - gaugeMax) * 0.05;
+  // STABLE scale: snap the max to a nice round number that only grows (so the
+  // needle position is meaningful and doesn't jitter every frame).
+  const want = niceMax(Math.max(peakTpm, tpm, 4000) * 1.1);
+  if (want > gaugeMax) gaugeMax = want; // grow only
+  const gMax = gaugeMax;
 
-  const start = Math.PI * 0.92,
-    end = Math.PI * 2.08;
+  const start = Math.PI * 0.86,
+    end = Math.PI * 2.14;
   const sweep = end - start;
+  const angAt = (frac) => start + sweep * Math.max(0, Math.min(1, frac));
 
+  // colored zones
   const zones = [
     [0.0, 0.6, "#4caf82"],
     [0.6, 0.85, "#f5c451"],
     [0.85, 1.0, "#e0564a"],
   ];
-  gctx.lineWidth = 18;
+  gctx.lineWidth = 16;
   gctx.lineCap = "butt";
   for (const [a, b, col] of zones) {
     gctx.beginPath();
@@ -117,54 +132,111 @@ function drawGauge(tpm, peakTpm, rateLimited) {
     gctx.stroke();
   }
 
-  gctx.strokeStyle = "#3a4150";
-  gctx.lineWidth = 2;
-  for (let i = 0; i <= 10; i++) {
-    const ang = start + (sweep * i) / 10;
-    const r1 = r - 26,
-      r2 = r - 14;
+  // ticks + NUMERIC LABELS at 0, 25, 50, 75, 100% of the scale
+  gctx.fillStyle = "#8a93a6";
+  gctx.font = "10px ui-monospace, monospace";
+  for (let i = 0; i <= 4; i++) {
+    const frac = i / 4;
+    const ang = angAt(frac);
+    const r1 = r - 22,
+      r2 = r - 9;
+    gctx.strokeStyle = "#4a5160";
+    gctx.lineWidth = 2;
     gctx.beginPath();
     gctx.moveTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
     gctx.lineTo(cx + Math.cos(ang) * r2, cy + Math.sin(ang) * r2);
     gctx.stroke();
+    // label just outside the arc
+    const lr = r + 16;
+    const lx = cx + Math.cos(ang) * lr;
+    const ly = cy + Math.sin(ang) * lr;
+    gctx.textAlign = frac < 0.4 ? "right" : frac > 0.6 ? "left" : "center";
+    gctx.textBaseline = "middle";
+    gctx.fillText(fmt(Math.round(gMax * frac)), lx, ly);
+  }
+  gctx.textBaseline = "alphabetic";
+
+  // RATE-LIMIT HISTORY: small red ticks at the tokens/min levels where 429s
+  // happened (your observed throttle points). Helps you see your effective
+  // ceiling at a glance.
+  const rlLevels = (snap?.minutes || [])
+    .filter((m) => m.rate_limited > 0)
+    .map((m) => m.input + m.output)
+    .filter((v) => v > 0);
+  if (rlLevels.length) {
+    gctx.strokeStyle = "#e0564a";
+    gctx.lineWidth = 2;
+    for (const lvl of rlLevels) {
+      const ang = angAt(lvl / gMax);
+      gctx.beginPath();
+      gctx.moveTo(cx + Math.cos(ang) * (r - 9), cy + Math.sin(ang) * (r - 9));
+      gctx.lineTo(cx + Math.cos(ang) * (r + 10), cy + Math.sin(ang) * (r + 10));
+      gctx.stroke();
+    }
+    // lowest observed 429 level = your effective ceiling — draw a dashed line
+    const ceiling = Math.min(...rlLevels);
+    const ca = angAt(ceiling / gMax);
+    gctx.strokeStyle = "#e0564a";
+    gctx.setLineDash([3, 3]);
+    gctx.lineWidth = 1.5;
+    gctx.beginPath();
+    gctx.moveTo(cx, cy);
+    gctx.lineTo(cx + Math.cos(ca) * (r + 10), cy + Math.sin(ca) * (r + 10));
+    gctx.stroke();
+    gctx.setLineDash([]);
   }
 
+  // peak marker (amber)
   if (peakTpm > 0) {
-    const pa = start + sweep * Math.min(1, peakTpm / gaugeMax);
+    const pa = angAt(peakTpm / gMax);
     gctx.strokeStyle = "#f5c451";
     gctx.lineWidth = 3;
     gctx.beginPath();
-    gctx.moveTo(cx + Math.cos(pa) * (r - 30), cy + Math.sin(pa) * (r - 30));
-    gctx.lineTo(cx + Math.cos(pa) * (r + 6), cy + Math.sin(pa) * (r + 6));
+    gctx.moveTo(cx + Math.cos(pa) * (r - 28), cy + Math.sin(pa) * (r - 28));
+    gctx.lineTo(cx + Math.cos(pa) * (r + 8), cy + Math.sin(pa) * (r + 8));
     gctx.stroke();
   }
 
+  // needle
   needle += (tpm - needle) * 0.18;
-  const na = start + sweep * Math.min(1, needle / gaugeMax);
+  const na = angAt(needle / gMax);
   gctx.strokeStyle = rateLimited ? "#e0564a" : "#d97757";
   gctx.lineWidth = 4;
   gctx.lineCap = "round";
   gctx.beginPath();
   gctx.moveTo(cx, cy);
-  gctx.lineTo(cx + Math.cos(na) * (r - 8), cy + Math.sin(na) * (r - 8));
+  gctx.lineTo(cx + Math.cos(na) * (r - 6), cy + Math.sin(na) * (r - 6));
   gctx.stroke();
   gctx.fillStyle = rateLimited ? "#e0564a" : "#d97757";
   gctx.beginPath();
-  gctx.arc(cx, cy, 8, 0, Math.PI * 2);
+  gctx.arc(cx, cy, 7, 0, Math.PI * 2);
   gctx.fill();
 
+  // center readout
   gctx.fillStyle = "#e6e9ef";
   gctx.textAlign = "center";
-  gctx.font = "600 30px ui-monospace, monospace";
-  gctx.fillText(fmt(Math.round(needle)), cx, cy - r * 0.42);
+  gctx.font = "600 28px ui-monospace, monospace";
+  gctx.fillText(fmt(Math.round(needle)), cx, cy - r * 0.40);
   gctx.fillStyle = "#7a8294";
-  gctx.font = "12px ui-monospace, monospace";
-  gctx.fillText("tokens / min", cx, cy - r * 0.42 + 20);
+  gctx.font = "11px ui-monospace, monospace";
+  gctx.fillText("tokens / min", cx, cy - r * 0.40 + 18);
+  // scale caption
+  gctx.fillStyle = "#5a6172";
+  gctx.font = "10px ui-monospace, monospace";
+  gctx.fillText("scale 0–" + fmt(gMax) + " tok/min", cx, cy + 16);
 
   if (rateLimited) {
     gctx.fillStyle = "#e0564a";
-    gctx.font = "600 14px ui-monospace, monospace";
-    gctx.fillText("⛔ RATE LIMITED", cx, cy + 24);
+    gctx.font = "600 13px ui-monospace, monospace";
+    gctx.fillText("⛔ RATE LIMITED", cx, cy + 32);
+  } else if (rlLevels.length) {
+    gctx.fillStyle = "#e0564a";
+    gctx.font = "10px ui-monospace, monospace";
+    gctx.fillText(
+      "⛔ seen at ~" + fmt(Math.min(...rlLevels)) + "/min",
+      cx,
+      cy + 32,
+    );
   }
 }
 

@@ -25,7 +25,12 @@
       <!-- TOP ROW: live gauge + key stat tiles -->
       <section class="row top">
         <div class="card gaugecard">
-          <canvas id="gauge" width="360" height="250"></canvas>
+          <canvas id="gauge" width="360" height="260"></canvas>
+          <div class="gauge-legend">
+            <span><i class="gm needle"></i> now</span>
+            <span><i class="gm peak"></i> peak</span>
+            <span><i class="gm rl"></i> past rate-limit points</span>
+          </div>
         </div>
         <div class="card statgrid">
           <div class="metric">
